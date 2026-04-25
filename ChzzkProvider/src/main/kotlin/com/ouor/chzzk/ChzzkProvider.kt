@@ -285,6 +285,11 @@ class ChzzkProvider : MainAPI() {
     }
 
     // -------------------------------------------------------------- loadLinks
+    //
+    // Chzzk's `playerAdFlag` (preRoll/midRoll) governs ad insertion in the
+    // official web player. We deliberately ignore it here — we pull the HLS
+    // master directly, which the CDN serves without ad-stitching, so users
+    // get an ad-free stream as a side effect of using the raw playback URL.
 
     override suspend fun loadLinks(
         data: String,
@@ -339,8 +344,12 @@ class ChzzkProvider : MainAPI() {
         isLive: Boolean,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // Prefer the standard HLS master playlist; fall back to LLHLS only when
-        // HLS is unavailable, since some players struggle with low-latency HLS.
+        // For live we offer both standard HLS and low-latency LLHLS as separate
+        // entries — users pick from the player menu. For VOD only standard HLS
+        // exists in the playback payload, so the loop emits one entry.
+        // M3u8Helper.generateM3u8 fetches the master and returns one
+        // ExtractorLink per EXT-X-STREAM-INF variant, giving the player a
+        // proper quality menu (1080p / 720p / 480p / 360p / 144p).
         val ordered = mediaList.sortedBy {
             when (it.mediaId) {
                 "HLS" -> 0
@@ -351,20 +360,29 @@ class ChzzkProvider : MainAPI() {
         var emitted = 0
         for (media in ordered) {
             if (media.protocol?.uppercase() != "HLS") continue
-            // Expand the master m3u8 into per-quality variants.
-            val expanded = runCatching {
+            val sourceLabel = when (media.mediaId.uppercase()) {
+                "LLHLS" -> "$name (저지연)"
+                "HLS" -> name
+                else -> "$name ${media.mediaId}"
+            }
+            val variants = runCatching {
                 M3u8Helper.generateM3u8(
-                    source = name,
+                    source = sourceLabel,
                     streamUrl = media.path,
                     referer = Urls.WEB_BASE,
-                ).also { variants -> variants.forEach { callback(it) } }
+                )
             }.getOrNull()
 
-            if (expanded.isNullOrEmpty()) {
+            if (!variants.isNullOrEmpty()) {
+                variants.forEach(callback)
+                emitted += variants.size
+            } else {
+                // Master expansion failed — emit a single link pointing at the
+                // master m3u8 so ExoPlayer can do its own ABR selection.
                 callback(
                     ExtractorLink(
-                        source = name,
-                        name = "$name ${media.mediaId} ($label)",
+                        source = sourceLabel,
+                        name = "$sourceLabel · $label",
                         url = media.path,
                         referer = Urls.WEB_BASE,
                         quality = qualityFromTracks(media.encodingTrack),
@@ -372,9 +390,8 @@ class ChzzkProvider : MainAPI() {
                         type = ExtractorLinkType.M3U8,
                     )
                 )
+                emitted++
             }
-            emitted++
-            if (isLive) break // one master is enough for live
         }
         return emitted > 0
     }
