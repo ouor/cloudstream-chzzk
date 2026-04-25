@@ -4,13 +4,16 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import android.widget.Toast
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.android.material.textfield.TextInputEditText
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.ouor.chzzk.R
 import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.auth.ChzzkAuth
-import com.ouor.chzzk.databinding.FragmentChzzkSettingsBinding
 
 /**
  * Provider settings UI. Surfaces:
@@ -21,41 +24,53 @@ import com.ouor.chzzk.databinding.FragmentChzzkSettingsBinding
  *   - LLHLS preference toggle, persisted to [ChzzkSettings].
  *   - Cache invalidation button (drops the in-process LRU).
  *
- * Resources (layout xml, strings) are packaged into the .cs3 by the
- * cloudstream gradle plugin and loaded through the plugin classloader, so
- * the standard ViewBinding.inflate path works without any classloader
- * acrobatics.
+ * Uses raw [findViewById] rather than ViewBinding because the cloudstream
+ * gradle plugin's `make` task does not include the Java-compiled binding
+ * output in the .cs3 dex, even though `viewBinding = true` causes the
+ * binding class to be generated. Symptom was a runtime
+ * `NoClassDefFoundError: ...databinding.FragmentChzzkSettingsBinding`.
+ * findViewById sidesteps the issue at the cost of a ~30-line view lookup
+ * block — a worthwhile trade for not depending on a broken intermediate.
  */
 class ChzzkSettingsFragment(
     @Suppress("unused") private val plugin: Plugin,
 ) : BottomSheetDialogFragment() {
 
-    private var binding: FragmentChzzkSettingsBinding? = null
+    private var loginStatusView: TextView? = null
+    private var inputAut: TextInputEditText? = null
+    private var inputSes: TextInputEditText? = null
+    private var switchLlhls: SwitchMaterial? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?,
     ): View {
-        binding = FragmentChzzkSettingsBinding.inflate(inflater, container, false)
-        return binding!!.root
+        return inflater.inflate(R.layout.fragment_chzzk_settings, container, false)
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        val b = binding ?: return
+
+        loginStatusView = view.findViewById(R.id.chzzkLoginStatus)
+        inputAut = view.findViewById(R.id.chzzkInputAut)
+        inputSes = view.findViewById(R.id.chzzkInputSes)
+        switchLlhls = view.findViewById(R.id.chzzkSwitchLlhls)
+        val btnSaveLogin = view.findViewById<MaterialButton>(R.id.chzzkBtnSaveLogin)
+        val btnLogout = view.findViewById<MaterialButton>(R.id.chzzkBtnLogout)
+        val btnClearCache = view.findViewById<MaterialButton>(R.id.chzzkBtnClearCache)
 
         // Pre-fill from current snapshots so the user can see what is stored.
         val authSnap = ChzzkAuth.current()
         val settingsSnap = ChzzkSettings.current()
-        b.chzzkInputAut.setText(authSnap.nidAut.orEmpty())
-        b.chzzkInputSes.setText(authSnap.nidSes.orEmpty())
-        b.chzzkSwitchLlhls.isChecked = settingsSnap.preferLowLatency
+        inputAut?.setText(authSnap.nidAut.orEmpty())
+        inputSes?.setText(authSnap.nidSes.orEmpty())
+        switchLlhls?.isChecked = settingsSnap.preferLowLatency
         refreshLoginBadge(authSnap.isLoggedIn)
 
-        b.chzzkBtnSaveLogin.setOnClickListener {
-            val aut = b.chzzkInputAut.text?.toString().orEmpty().trim()
-            val ses = b.chzzkInputSes.text?.toString().orEmpty().trim()
+        btnSaveLogin.setOnClickListener {
+            val aut = inputAut?.text?.toString().orEmpty().trim()
+            val ses = inputSes?.text?.toString().orEmpty().trim()
             if (aut.isBlank() || ses.isBlank()) {
                 toast(R.string.chzzk_toast_login_blank)
                 return@setOnClickListener
@@ -66,28 +81,27 @@ class ChzzkSettingsFragment(
             toast(R.string.chzzk_toast_saved)
         }
 
-        b.chzzkBtnLogout.setOnClickListener {
+        btnLogout.setOnClickListener {
             ChzzkAuth.clear()
             ChzzkApi.invalidateCache()
-            b.chzzkInputAut.setText("")
-            b.chzzkInputSes.setText("")
+            inputAut?.setText("")
+            inputSes?.setText("")
             refreshLoginBadge(loggedIn = false)
             toast(R.string.chzzk_toast_logged_out)
         }
 
-        b.chzzkSwitchLlhls.setOnCheckedChangeListener { _, isChecked ->
+        switchLlhls?.setOnCheckedChangeListener { _, isChecked ->
             ChzzkSettings.setPreferLowLatency(isChecked)
         }
 
-        b.chzzkBtnClearCache.setOnClickListener {
+        btnClearCache.setOnClickListener {
             ChzzkApi.invalidateCache()
             toast(R.string.chzzk_toast_cleared)
         }
     }
 
     private fun refreshLoginBadge(loggedIn: Boolean) {
-        val b = binding ?: return
-        b.chzzkLoginStatus.setText(
+        loginStatusView?.setText(
             if (loggedIn) R.string.chzzk_login_status_in else R.string.chzzk_login_status_out,
         )
     }
@@ -97,7 +111,10 @@ class ChzzkSettingsFragment(
     }
 
     override fun onDestroyView() {
-        binding = null
+        loginStatusView = null
+        inputAut = null
+        inputSes = null
+        switchLlhls = null
         super.onDestroyView()
     }
 }

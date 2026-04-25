@@ -27,7 +27,13 @@ cloudstream {
 android {
     buildFeatures {
         buildConfig = true
-        viewBinding = true
+        // viewBinding intentionally disabled: the cloudstream gradle plugin's
+        // make task does not bundle the Java-compiled binding classes into
+        // the .cs3 dex, which causes a runtime NoClassDefFoundError when the
+        // settings fragment tries to inflate via the generated binding. The
+        // fragment uses findViewById instead, which is included in the
+        // Kotlin compile output.
+        viewBinding = false
     }
 }
 
