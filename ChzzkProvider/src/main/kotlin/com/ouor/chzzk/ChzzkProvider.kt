@@ -27,6 +27,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.api.Endpoints
+import com.ouor.chzzk.auth.ChzzkAuth
 import com.ouor.chzzk.models.ChannelInfo
 import com.ouor.chzzk.models.ChzzkResponse
 import com.ouor.chzzk.models.HomeMain
@@ -113,10 +114,14 @@ class ChzzkProvider : MainAPI() {
         val res = parseJson<ChzzkResponse<HomeMain>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "home main")
         val home = res.content ?: return emptyList()
+        val hideAdult = !ChzzkAuth.current().isLoggedIn
         val seen = mutableSetOf<Long>()
         return buildList {
-            home.topLives.filterNot { it.adult }.forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
-            home.slots.flatMap { it.slotContents }.filterNot { it.adult }
+            home.topLives.asSequence()
+                .filterNot { hideAdult && it.adult }
+                .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
+            home.slots.asSequence().flatMap { it.slotContents.asSequence() }
+                .filterNot { hideAdult && it.adult }
                 .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
         }
     }
@@ -204,7 +209,8 @@ class ChzzkProvider : MainAPI() {
         if (next != null) {
             cache[page] = encodeCategoryCursor(next.first, next.second)
         }
-        val items = batch.lives.filterNot { it.adult }.map { it.toSearchResponse() }
+        // adult filtering already applied in fetchCategory based on auth state
+        val items = batch.lives.map { it.toSearchResponse() }
         return items to (next != null)
     }
 
@@ -226,7 +232,8 @@ class ChzzkProvider : MainAPI() {
         val res = parseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "category lives $type/$id")
         val pageData = res.content
-        val lives = pageData?.data.orEmpty()
+        val hideAdult = !ChzzkAuth.current().isLoggedIn
+        val lives = pageData?.data.orEmpty().filterNot { hideAdult && it.adult }
         val nextMap = pageData?.page?.next
         val next = nextMap?.let {
             val cu = (it["concurrentUserCount"] as? Number)?.toInt()
@@ -426,8 +433,8 @@ class ChzzkProvider : MainAPI() {
         if (detail.status != "OPEN") {
             throw ErrorLoadingException("이 채널은 현재 방송 중이 아닙니다.")
         }
-        if (detail.adult) {
-            throw ErrorLoadingException("성인 인증이 필요한 방송입니다. (로그인 미지원)")
+        if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
+            throw ErrorLoadingException("성인 방송입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
         }
         if (detail.blindType != null) {
             throw ErrorLoadingException("이 방송은 시청이 제한되었습니다 (${detail.blindType}).")
@@ -450,8 +457,8 @@ class ChzzkProvider : MainAPI() {
         if (detail.vodStatus != null && detail.vodStatus != "NONE") {
             throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
         }
-        if (detail.adult) {
-            throw ErrorLoadingException("성인 인증이 필요한 영상입니다. (로그인 미지원)")
+        if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
+            throw ErrorLoadingException("성인 영상입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
         }
         if (detail.blindType != null) {
             throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")

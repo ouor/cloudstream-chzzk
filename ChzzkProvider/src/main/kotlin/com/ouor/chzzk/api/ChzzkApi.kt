@@ -3,6 +3,7 @@ package com.ouor.chzzk.api
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
+import com.ouor.chzzk.auth.ChzzkAuth
 
 object ChzzkApi {
     private val DEFAULT_HEADERS = mapOf(
@@ -16,7 +17,8 @@ object ChzzkApi {
     )
 
     suspend fun get(url: String, extraHeaders: Map<String, String> = emptyMap()): NiceResponse {
-        return app.get(url, headers = DEFAULT_HEADERS + extraHeaders)
+        val authHeaders = ChzzkAuth.cookieHeader()?.let { mapOf("Cookie" to it) } ?: emptyMap()
+        return app.get(url, headers = DEFAULT_HEADERS + authHeaders + extraHeaders)
     }
 
     fun checkOk(code: Int, message: String?, what: String) {
