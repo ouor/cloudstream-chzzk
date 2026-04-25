@@ -28,6 +28,9 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.api.Endpoints
 import com.ouor.chzzk.auth.ChzzkAuth
+import com.ouor.chzzk.models.ChatRules
+import com.ouor.chzzk.models.DonationRankResponse
+import com.ouor.chzzk.models.DonationRanker
 import com.ouor.chzzk.models.ChannelInfo
 import com.ouor.chzzk.models.ChzzkResponse
 import com.ouor.chzzk.models.HomeMain
@@ -440,13 +443,14 @@ class ChzzkProvider : MainAPI() {
             throw ErrorLoadingException("이 방송은 시청이 제한되었습니다 (${detail.blindType}).")
         }
         val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
+        val plotText = augmentPlotWithCommunity(buildPlot(detail), channelId)
         return newLiveStreamLoadResponse(
             name = detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live",
             url = url,
             dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.LIVE, channelId, detail.liveTitle)),
         ) {
             posterUrl = detail.liveImageUrl?.let { fillThumb(it) } ?: detail.channel.channelImageUrl
-            plot = buildPlot(detail)
+            plot = plotText
             tags = buildTags(detail.liveCategoryValue, detail.tags)
             recommendations = recs
         }
@@ -545,6 +549,7 @@ class ChzzkProvider : MainAPI() {
         }
 
         val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
+        val plotText = augmentPlotWithCommunity(info.channelDescription.orEmpty(), channelId)
         return newTvSeriesLoadResponse(
             name = info.channelName ?: channelId,
             url = url,
@@ -552,7 +557,7 @@ class ChzzkProvider : MainAPI() {
             episodes = episodes,
         ) {
             posterUrl = info.channelImageUrl
-            plot = info.channelDescription
+            plot = plotText
             tags = buildTags(live?.liveCategoryValue, live?.tags)
             recommendations = recs
         }
@@ -819,6 +824,47 @@ class ChzzkProvider : MainAPI() {
             appendLine()
             append("방송 시작 ${detail.openDate}")
         }
+    }
+
+    /**
+     * Append weekly donation top-N and chat rule snippet to a base plot.
+     * Both fetches are best-effort — failures are silently swallowed since
+     * the plot is metadata enrichment, not core functionality.
+     */
+    private suspend fun augmentPlotWithCommunity(base: String, channelId: String): String {
+        val rankers = runCatching {
+            val raw = ChzzkApi.get(Endpoints.donationRankWeekly(channelId, rankCount = 5)).text
+            parseJson<ChzzkResponse<DonationRankResponse>>(raw)
+                .content?.rankList.orEmpty()
+        }.getOrDefault(emptyList<DonationRanker>())
+
+        val rules = runCatching {
+            val raw = ChzzkApi.get(Endpoints.chatRules(channelId)).text
+            parseJson<ChzzkResponse<ChatRules>>(raw).content
+        }.getOrNull()
+
+        return buildString {
+            append(base)
+            if (rankers.isNotEmpty()) {
+                appendLine().appendLine()
+                appendLine("💝 주간 후원 TOP")
+                rankers.take(5).forEach { r ->
+                    val verified = if (r.verifiedMark) "✓ " else ""
+                    appendLine("${r.ranking}. $verified${r.nickName ?: "익명"} — ${formatCurrency(r.donationAmount)}")
+                }
+            }
+            if (rules != null && !rules.rule.isNullOrBlank()) {
+                appendLine().appendLine()
+                appendLine("📋 채팅 규칙")
+                append(rules.rule.lineSequence().take(4).joinToString("\n").take(400))
+                if (rules.rule.length > 400) append("…")
+            }
+        }
+    }
+
+    private fun formatCurrency(amount: Long): String = when {
+        amount >= 10_000 -> "%.1f만원".format(amount / 10_000.0)
+        else -> "${amount}원"
     }
 
     private fun buildVideoPlot(detail: VideoDetail): String = buildString {

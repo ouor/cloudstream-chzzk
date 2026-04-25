@@ -74,6 +74,19 @@ object Endpoints {
     fun liveAutoPlay(liveId: Long) =
         "$API_BASE/service/v1/live/$liveId/auto-play-info"
 
+    fun videoChats(videoNo: Long, playerMessageTime: Long = 0, previousVideoChatSize: Int = 50) =
+        "$API_BASE/service/v1/videos/$videoNo/chats" +
+                "?playerMessageTime=$playerMessageTime&previousVideoChatSize=$previousVideoChatSize"
+
+    fun chatRules(channelId: String) =
+        "$API_BASE/service/v1/channels/$channelId/chat-rules"
+
+    fun donationRankWeekly(channelId: String, rankCount: Int = 5) =
+        "$API_BASE/commercial/v1/channels/$channelId/donation/rank/weekly" +
+                "?channelId=$channelId&withMyRank=false&rankCount=$rankCount"
+
+    fun nicknameColorCodes() = "$API_BASE/service/v2/nickname/color/codes"
+
     private fun randomDt(): String =
         (0..0xFFFFF).random().toString(16)
 
