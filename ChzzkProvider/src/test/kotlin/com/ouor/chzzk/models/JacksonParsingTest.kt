@@ -139,6 +139,35 @@ class JacksonParsingTest {
         assertEquals("1280", rep.height)
     }
 
+    @Test fun `rmcnmv vod play-info exposes mp4 list and HLS master with auth keys`() {
+        // Verifies the apis.naver.com /rmcnmv response shape that powers
+        // long-form ABR_HLS VOD playback. Real fixture from a 2026-04-26
+        // capture of video #12893353. The DTOs must surface:
+        //   - 3 mp4 entries in videos.list (1080p / 720p / 144p), each with
+        //     a `_lsu_sa_` token already embedded in the source URL
+        //   - one HLS stream (streams[0]) with a master m3u8 + a single
+        //     `_lsu_sa_` key entry that callers must append to the URL
+        val json = loadFixture("vod-rmcnmv-play.json")
+        val info: RmcnmvPlayInfo = mapper.readValue(json)
+        val mp4s = info.videos?.list.orEmpty()
+        assertEquals("expected three progressive MP4 quality entries", 3, mp4s.size)
+        val heights = mp4s.map { it.encodingOption?.height }.toSet()
+        assertTrue("expected 1080p in MP4 list", 1080 in heights)
+        val firstMp4Source = mp4s.first().source
+        assertNotNull(firstMp4Source)
+        assertTrue(
+            "MP4 source URL should be auth-signed via _lsu_sa_",
+            firstMp4Source!!.contains("_lsu_sa_="),
+        )
+
+        val hls = info.streams.firstOrNull { it.type.equals("HLS", ignoreCase = true) }
+        assertNotNull("expected one HLS stream", hls)
+        assertNotNull(hls!!.source)
+        val authKey = hls.keys.firstOrNull { it.name == "_lsu_sa_" }
+        assertNotNull("HLS stream must carry the _lsu_sa_ auth param", authKey)
+        assertNotNull(authKey!!.value)
+    }
+
     @Test fun `category-lives parses with cursor next pointer`() {
         val json = loadFixture("category-lives.json")
         val res: ChzzkResponse<PageData<LiveSummary>> = mapper.readValue(json)

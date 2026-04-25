@@ -51,6 +51,14 @@ data class VideoDetail(
     val liveOpenDate: String? = null,
     val vodStatus: String? = null,
     val liveRewindPlaybackJson: String? = null,
+    /**
+     * RMC video player auth token (~85-char hex starting with 'V'). Required
+     * for the apis.naver.com /rmcnmv/rmcnmv/vod/play/v2.0/{videoId} call that
+     * resolves ABR_HLS VOD playback URLs. Populated by the official
+     * /service/v3/videos/{n} endpoint for ABR_HLS videos; null for
+     * live-rewind VODs (which use [liveRewindPlaybackJson] inline instead).
+     */
+    val inKey: String? = null,
     val prevVideo: VideoSummary? = null,
     val nextVideo: VideoSummary? = null,
 )

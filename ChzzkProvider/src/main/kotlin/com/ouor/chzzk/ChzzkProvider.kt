@@ -32,6 +32,7 @@ import com.ouor.chzzk.settings.ChzzkSettings
 import com.ouor.chzzk.models.CafeConnection
 import com.ouor.chzzk.models.ChatRules
 import com.ouor.chzzk.models.ClipDetail
+import com.ouor.chzzk.models.RmcnmvPlayInfo
 import com.ouor.chzzk.models.ShortformCardEnvelope
 import com.ouor.chzzk.models.DonationRankResponse
 import com.ouor.chzzk.models.DonationRanker
@@ -745,23 +746,99 @@ class ChzzkProvider : MainAPI() {
             )
         }
 
-        // Path 2: ABR_HLS VODs (and possibly other modern VOD formats) do
-        // NOT embed liveRewindPlaybackJson. The official web player resolves
-        // their playback URL via api-videohub.naver.com, the same endpoint
-        // clips use. We fall back here using the videoId we already have.
-        // Verified against logcat reproduction:
-        //   ApiError: liveRewindPlaybackJson 누락 (vodStatus=ABR_HLS)
+        // Path 2: ABR_HLS VODs do NOT embed liveRewindPlaybackJson. The
+        // official web player calls Naver's RMC video player API (apis.naver.com
+        // /rmcnmv/...) using the `inKey` token from videoDetail. The
+        // /shortformhub endpoint that clips use returns errorCode=GET_FAILED
+        // for these — verified against video #12893353 on 2026-04-26.
         val videoId = detail.videoId
             ?: throw ErrorLoadingException(
                 "재생 URL을 찾지 못했습니다 (videoId 누락, vodStatus=${detail.vodStatus})."
             )
-        return emitFromVideohub(
-            playInfoUrl = Endpoints.vodPlayInfo(videoId = videoId, videoNo = videoNo),
+        val inKey = detail.inKey
+            ?: throw ErrorLoadingException(
+                "재생 URL을 찾지 못했습니다 (inKey 누락, vodStatus=${detail.vodStatus})."
+            )
+        return emitFromRmcnmv(
+            videoId = videoId,
+            inKey = inKey,
             label = label,
-            sourceLabel = name,
             errorTag = "video #$videoNo",
             callback = callback,
         )
+    }
+
+    /**
+     * Hits Naver's RMC video player play-info API and emits ExtractorLinks
+     * for every quality available. Strategy:
+     *   1. Emit each progressive MP4 from `videos.list[]` — these are
+     *      single-quality, single-file streams with the auth token already
+     *      embedded in the URL. Most reliable for downstream players.
+     *   2. Then emit the HLS master from `streams[type=HLS]` with the
+     *      `_lsu_sa_` query token appended, so users who prefer ABR can
+     *      pick the master playlist from the source menu.
+     */
+    private suspend fun emitFromRmcnmv(
+        videoId: String,
+        inKey: String,
+        label: String,
+        errorTag: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val raw = ChzzkApi.getText(Endpoints.rmcnmvVodPlay(videoId = videoId, inKey = inKey))
+        val info = parseJson<RmcnmvPlayInfo>(raw)
+        var emitted = 0
+
+        // Sort MP4 entries by descending height so the largest quality lands
+        // at the top of the player source menu.
+        val mp4Entries = info.videos?.list.orEmpty()
+            .filter { !it.source.isNullOrBlank() }
+            .sortedByDescending { it.encodingOption?.height ?: 0 }
+        for (entry in mp4Entries) {
+            val height = entry.encodingOption?.height ?: 0
+            val qualityName = entry.encodingOption?.name ?: entry.encodingOption?.id ?: "MP4"
+            callback(
+                ExtractorLink(
+                    source = name,
+                    name = "$name · $label · $qualityName",
+                    url = entry.source!!,
+                    referer = Urls.WEB_BASE,
+                    quality = height,
+                    type = ExtractorLinkType.VIDEO,
+                )
+            )
+            emitted++
+        }
+
+        // HLS master playlist for ABR-capable players. The `keys` list carries
+        // a single `{type: "param", name: "_lsu_sa_", value: ...}` entry that
+        // must be appended to every HLS URL.
+        val hls = info.streams.firstOrNull { it.type.equals("HLS", ignoreCase = true) }
+        val hlsSource = hls?.source
+        if (hls != null && !hlsSource.isNullOrBlank()) {
+            val authQuery = hls.keys
+                .filter { it.type == "param" && !it.name.isNullOrBlank() && !it.value.isNullOrBlank() }
+                .joinToString("&") { "${it.name}=${it.value}" }
+            val finalUrl = if (authQuery.isBlank()) hlsSource
+            else if (hlsSource.contains('?')) "$hlsSource&$authQuery"
+            else "$hlsSource?$authQuery"
+            callback(
+                ExtractorLink(
+                    source = name,
+                    name = "$name · $label · HLS (ABR)",
+                    url = finalUrl,
+                    referer = Urls.WEB_BASE,
+                    quality = 0,
+                    type = ExtractorLinkType.M3U8,
+                )
+            )
+            emitted++
+        }
+
+        if (emitted == 0) {
+            throw ErrorLoadingException("재생 정보를 찾지 못했습니다 ($errorTag).")
+        }
+        return true
     }
 
     /**

@@ -131,20 +131,21 @@ object Endpoints {
         )
 
     /**
-     * Same /shortformhub/feeds/v9/card endpoint, but for ABR_HLS VODs reached
-     * through chzzk.naver.com/video/{videoNo}. The `videoDetail` response
-     * does not include a `liveRewindPlaybackJson` for those VODs (only
-     * live-rewind VODs do), so playback resolution falls through to the
-     * videohub endpoint exactly the way the official web player does.
+     * Long-form ABR_HLS VOD play-info on Naver's RMC video player API. The
+     * videohub /shortformhub endpoint returns errorCode=GET_FAILED for these
+     * because it is shortform-only; long VODs go through `apis.naver.com`
+     * `rmcnmv` instead, with the `inKey` token from the videoDetail response
+     * as authentication. Verified against video #12893353 on 2026-04-26.
+     *
+     * Response shape — see [com.ouor.chzzk.models.RmcnmvPlayInfo]:
+     *   - `videos.list[]`  — direct progressive MP4 per quality (source URL
+     *     already carries an `_lsu_sa_=` auth token, ready to play)
+     *   - `streams[0]`     — HLS master + per-quality HLS variants; the HLS
+     *     URLs need `?_lsu_sa_=<keys[0].value>` appended for auth
      */
-    fun vodPlayInfo(videoId: String, videoNo: Long): String =
-        videohubPlayInfo(
-            videoId = videoId,
-            referer = "$WEB_BASE/video/$videoNo",
-            recId = """{"seedVideoNo":$videoNo,"fromType":"GLOBAL","listType":"RECOMMEND"}""",
-            clickNsc = "chzzk_url_video",
-            clickArea = "video_item",
-        )
+    fun rmcnmvVodPlay(videoId: String, inKey: String): String =
+        "https://apis.naver.com/rmcnmv/rmcnmv/vod/play/v2.0/$videoId" +
+                "?key=${inKey.urlEncode()}"
 
     private fun videohubPlayInfo(
         videoId: String,
