@@ -170,7 +170,16 @@ internal suspend fun MainAPI.loadChannel(url: String, channelId: String): LoadRe
     val info = channelRes.content ?: throw ErrorLoadingException("채널 정보를 불러오지 못했습니다.")
 
     val live = runCatching { fetchLiveDetail(channelId) }.getOrNull()?.takeIf { it.status == "OPEN" }
-    val videos = runCatching { fetchAllChannelVideos(channelId) }.getOrDefault(emptyList())
+    // Hide structurally non-playable VODs so taps from the channel TvSeries
+    // page don't dead-end on "링크를 찾을 수 없음". `searchVideos` already
+    // does this server-side, but `channelVideos` returns everything — hence
+    // the apparent search-works / channel-fails asymmetry. `vodStatus`
+    // (e.g. EXPIRED, PROCESSING) is detail-only, so it stays guarded inside
+    // [com.ouor.chzzk.loader.emitVodLinks] as a fallback.
+    val isLoggedIn = ChzzkAuth.current().isLoggedIn
+    val videos = runCatching { fetchAllChannelVideos(channelId) }
+        .getOrDefault(emptyList())
+        .filter { it.exposure && it.blindType == null && (!it.adult || isLoggedIn) }
 
     val episodes = mutableListOf<Episode>()
     if (live != null) {

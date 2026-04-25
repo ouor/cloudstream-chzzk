@@ -11,6 +11,7 @@ import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.api.Endpoints
 import com.ouor.chzzk.api.fetchLiveDetail
 import com.ouor.chzzk.api.fetchVideoDetail
+import com.ouor.chzzk.auth.ChzzkAuth
 import com.ouor.chzzk.models.ChzzkResponse
 import com.ouor.chzzk.models.ClipDetail
 import com.ouor.chzzk.models.LivePlayback
@@ -110,6 +111,21 @@ private suspend fun emitVodLinks(
     callback: (ExtractorLink) -> Unit,
 ): Boolean {
     val detail = fetchVideoDetail(videoNo)
+    // Same playability guards as ChzzkLoader.loadVideo. The search→VOD path
+    // hits those guards in load(); the channel→episode path bypasses load()
+    // entirely (PlayLink decode goes straight to emit), so without these
+    // guards an EXPIRED/PROCESSING/blinded VOD silently returned false here
+    // and surfaced the generic "링크를 찾을 수 없음" toast.
+    val playableStatuses = setOf("NONE", "ABR_HLS")
+    if (detail.vodStatus != null && detail.vodStatus !in playableStatuses) {
+        throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
+    }
+    if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
+        throw ErrorLoadingException("성인 영상입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
+    }
+    if (detail.blindType != null) {
+        throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")
+    }
     val label = title ?: detail.videoTitle ?: "video #$videoNo"
 
     // Path 1: live-rewind VODs ship `liveRewindPlaybackJson` inline (same
