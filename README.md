@@ -4,21 +4,22 @@
 
 > **⚠️ Status: Under active development.** Not yet recommended for end-users. See [PLAN.md](PLAN.md) for the development roadmap and [API.md](API.md) for the reverse-engineered Chzzk HTTP API specification.
 
-## Features (planned)
-- [ ] Live broadcast playback (HLS / LLHLS)
-- [ ] VOD (다시보기) playback with seeking
-- [ ] Clip playback
-- [ ] Channel browsing — current live + recent VODs
-- [ ] Category browsing (LoL, TFT, Talk, ...)
-- [ ] Korean keyword search across channels / lives / VODs
-- [ ] Home page with featured slots and recommended streamers
+## Features
+- [x] Live broadcast playback (HLS / LLHLS)
+- [x] VOD (다시보기) playback with seeking
+- [ ] Clip playback (endpoint TBD — see [PLAN.md](PLAN.md) §12)
+- [x] Channel browsing — current live + recent VODs as a TvSeries
+- [x] Category browsing (LoL, TFT, Valorant, OW2, Talk)
+- [x] Korean keyword search across channels / lives / VODs
+- [x] Home page with featured slots and recommended partner streamers
+- [ ] Login (19+ / subscriber-only content) — not in v1
 
-## Repository URL (for CloudStream)
-Once published, add this URL to CloudStream → Settings → Extensions → Add repository:
+## Adding to CloudStream
+Add this repository URL in CloudStream → Settings → Extensions → Add repository:
 ```
-https://raw.githubusercontent.com/ouor/cloudstream-chzzk/builds/repo.json
+https://raw.githubusercontent.com/ouor/cloudstream-chzzk/master/repo.json
 ```
-*(URL pending first release.)*
+The repo manifest points at the auto-generated `plugins.json` on the `builds` branch, which is updated by GitHub Actions after every push to `master`.
 
 ## Building locally
 ```

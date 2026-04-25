@@ -1,0 +1,8 @@
+{
+  "name": "Chzzk",
+  "description": "네이버 치지직 라이브 / 다시보기 / 클립 CloudStream 플러그인",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/ouor/cloudstream-chzzk/builds/plugins.json"
+  ]
+}
