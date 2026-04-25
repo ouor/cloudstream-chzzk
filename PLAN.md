@@ -1,341 +1,236 @@
-# Chzzk Plugin 개발 작업 계획
+# Chzzk Plugin 개발 계획
 
-CloudStream 3용 치지직(Chzzk) provider 플러그인 개발 로드맵. [API.md](API.md)의 명세를 기반으로 작성.
+CloudStream 3용 치지직(Chzzk) provider 플러그인 개발 로드맵. v1.0 기능은 [README.md](README.md)에 정리되어 있으며, API 명세는 [API.md](API.md)에 있다.
 
-## 0. 목표 정의
+---
 
-### 지원 콘텐츠
-- ✅ **라이브 방송** (현재 송출 중)
-- ✅ **다시보기 (REPLAY VOD)**
-- ✅ **클립**
-- ⏸️ 채팅 / 도네이션 / 멀티뷰 (1차 범위 외)
+## 1. 현재 상태 (v1.0 — 완료)
 
-### CloudStream `TvType` 매핑
-| Chzzk 콘텐츠 | TvType | 비고 |
+| 마일스톤 | 커밋 | 내용 |
 |---|---|---|
-| 라이브 방송 (`status: OPEN`) | `Live` | `LiveStreamLoadResponse` 사용 |
-| 다시보기 (`videoType: REPLAY`) | `Movie` 또는 `TvSeries` | 채널 단위로 묶을지 단일로 다룰지는 §2 결정 |
-| 클립 (60초 내외) | `Movie` | 짧은 영상이라 단일 entity |
+| **M0** Bootstrap | [88f063d](88f063d) | `ExampleProvider` → `ChzzkProvider` 리네이밍, `com.ouor.chzzk` 패키지, fragment UI 제거, gradle 메타데이터 |
+| **M0.5** Scaffold | [7aa5d0b](7aa5d0b) | `ChzzkApi`, `Endpoints`, Jackson DTO 9종, `Urls` 라우터 |
+| **M1** Discovery | [71124e6](71124e6) | `mainPage` (홈/파트너/카테고리 7섹션) + 통합 `search` |
+| **M2** Playback | [e569797](e569797) | `load` (live/video/clip/channel) + `loadLinks` (HLS 추출) |
+| **M3** Hardening | [be61367](be61367) | 성인/blindType 가드, 시청자 수 표시, 인증 마크 |
+| **M4** Release | [4d4bfd6](4d4bfd6) | `repo.json` 매니페스트, README 설치 가이드 |
+
+### v1.0이 지원하는 것
+- 라이브 / VOD HLS 재생 (master playlist 기반)
+- 채널 단위 묶음 (현재 라이브 + 최근 30개 VOD를 TvSeries로)
+- 5개 인기 카테고리 + 홈 + 파트너 스트리머
+- 한글 통합 검색 (channels/lives/videos 병합 + 중복 제거)
+- 성인 / blindType 자동 차단
+
+### v1.0이 미지원
+- 클립 재생 (엔드포인트 미캡처)
+- 페이지네이션 (모든 리스트 첫 페이지만)
+- 로그인 / 19+ / 구독 콘텐츠
+- 채팅 / 도네이션 / 멀티뷰 / WatchParty / 타임머신
+- 화질 직접 선택 (master m3u8에 위임)
 
 ---
 
-## 1. 프로젝트 부트스트랩 (1일차)
+## 2. 다음 작업: 그룹별 Sprint 계획
 
-**목표:** 빈 골격을 빌드 통과시키기.
+각 그룹은 **한 PR / 한 스프린트**로 처리할 단위. 코드 영역, 테스트 범위, 외부 의존성을 기준으로 묶었다.
 
-- [ ] **1.1** `ExampleProvider/` → `ChzzkProvider/`로 디렉토리 리네이밍
-- [ ] **1.2** 패키지 `com.example` → `com.ouor.chzzk`로 일괄 변경
-  - `AndroidManifest.xml`, `*.kt`, `build.gradle.kts`의 `namespace`
-- [ ] **1.3** 클래스 리네이밍: `ExampleProvider` → `ChzzkProvider`, `ExamplePlugin` → `ChzzkPlugin`
-- [ ] **1.4** `ChzzkProvider/build.gradle.kts` 메타데이터 작성
-  ```kotlin
-  description = "네이버 치지직 라이브/다시보기 스트리밍"
-  authors = listOf("ouor")
-  status = 1
-  tvTypes = listOf("Live", "Movie")
-  language = "ko"
-  iconUrl = "https://chzzk.naver.com/favicon.ico"
-  ```
-- [ ] **1.5** `requiresResources = false` 로 변경 (1차에선 fragment UI 미사용)
-  - `BlankFragment.kt` 및 `res/` 삭제
-  - `ChzzkPlugin.load()`에서 `openSettings` 제거
-- [ ] **1.6** `./gradlew :ChzzkProvider:assembleDebug` 빌드 통과 확인
-- [ ] **1.7** GitHub Actions secrets/permissions 확인 (Read & write, all actions enabled)
-- [ ] **1.8** README.md를 fork에 맞게 업데이트 (저장소 URL 등)
+### 🅰️ Group A — 화질 & 재생 옵션
+**범위:** `ChzzkProvider.kt::emitMediaLinks`, `models/Live.kt`
+- 수동 화질 선택 (`encodingTrack[]` 별 ExtractorLink 분리)
+- audioOnly 트랙 별도 emit
+- LLHLS vs HLS 토글 (settings에서)
+- 광고 우회 명시 (`playerAdFlag` 무시 명세화)
 
-**산출물:** 빌드 가능한 빈 ChzzkProvider, push 시 builds 브랜치에 .cs3 산출.
+**완료 기준:** 1080p/720p/480p/360p/144p/audio-only 6개 변형이 플레이어 메뉴에 표시.
 
 ---
 
-## 2. URL 스키마 & 데이터 모델 (1일차 후반)
+### 🅱️ Group B — 페이지네이션 일괄
+**범위:** `Endpoints.kt`, `ChzzkProvider.kt::getMainPage|search|loadChannel`
+- 검색 `offset` 페이지네이션
+- 카테고리 cursor (`concurrentUserCount`+`liveId`) 보존
+- 채널 VOD `page=N`
+- 클립 `clipUID` cursor
 
-**목표:** CloudStream의 ID URL을 Chzzk 식별자로 매핑하는 규칙 확정.
+**핵심 작업:** `MainPageRequest.data`에 cursor 직렬화하는 헬퍼(`CursorCodec`) 신설 — 4개 패턴이 같은 코드를 공유.
 
-### 2.1 URL 스키마 결정
-CloudStream의 `LoadResponse.url`과 `SearchResponse.url`로 사용할 내부 URL 형식. Chzzk의 실제 URL을 그대로 쓰는 것이 자연스럽고 깊은 링크에도 유리.
+**완료 기준:** 검색/카테고리/VOD 무한 스크롤 정상.
 
-| 콘텐츠 | URL 형식 |
-|---|---|
-| 채널 (라이브/VOD 묶음) | `https://chzzk.naver.com/{channelId}` |
-| 라이브 단일 | `https://chzzk.naver.com/live/{channelId}` |
-| VOD | `https://chzzk.naver.com/video/{videoNo}` |
-| 클립 | `https://chzzk.naver.com/clips/{clipUID}` |
+---
 
-### 2.2 Jackson 데이터 클래스
-응답 envelope + 도메인 모델을 별도 파일로 분리.
+### 🅲 Group C — mainPage 콘텐츠 다양화
+**범위:** `ChzzkProvider.kt::mainPage|getMainPage`, `Endpoints.kt`
+- 카테고리 동적 로딩 (`/categories/live`)
+- 편성표 섹션 (`program-schedules/coming`)
+- 홈 배너 (`banners`)
+- 태그 기반 탐색 (검색 결과 활용)
+
+**완료 기준:** 홈 화면 섹션 8+ 개, 카테고리 하드코딩 제거.
+
+---
+
+### 🅳 Group D — load 페이지 풍성화
+**범위:** `ChzzkProvider.kt::loadChannel|loadVideo`
+- 채널 추천 (`live-recommended` → `LoadResponse.recommendations`)
+- Prev/Next VOD 시리즈 묶기 (`prevVideo`/`nextVideo` 그래프)
+- 비디오 챕터 (`chapters[]`) — 시킹 마커
+- VOD 자동 다음편 큐
+- (Group M 흡수) Sprite seeking 썸네일, trailer 미리보기
+
+**완료 기준:** VOD 끝나면 자동으로 다음 편 재생. 채널 페이지 하단에 추천 라이브 표시.
+
+---
+
+### 🅴 Group E — 클립 지원 (사전조사 + 구현)
+**범위:** 추가 캡처 → `Endpoints.clip*`, `loadClip`, 클립 `loadLinks` 분기
+
+**사전조사:**
+1. `https://chzzk.naver.com/clips/{clipUID}` 페이지 네트워크 트래픽 캡처
+2. 재생 URL 엔드포인트 식별 (예상: `service/v1/play-info/clip/{uid}` 또는 유사)
+3. HLS / MP4 / progressive download 여부 확인
+
+**완료 기준:** 검색에서 노출된 클립 클릭 시 재생.
+
+---
+
+### 🅵 Group F — 검색 응답성
+**범위:** `ChzzkProvider.kt::quickSearch`, `Endpoints.kt`
+- `quickSearch`를 autocomplete API로 분리 (현재 `search()` 재사용)
+- 시청자 수 / 카테고리 정렬 옵션
+- 검색 필터 (라이브 only / VOD only)
+
+**완료 기준:** 키 입력 즉시 자동완성 나옴 (현재는 무거운 통합 검색이 발화).
+
+---
+
+### 🅶 Group G — 로그인 & 개인화
+**범위:** 신규 `auth/`, `LoginAPI` 구현, `ChzzkApi` 쿠키 주입
+- 로그인 (`NID_AUT`/`NID_SES` 쿠키 입력)
+- 팔로잉 라이브 mainPage 섹션
+- 시청 기록 (`watchTimeline`)
+- 19+ 콘텐츠 접근 (성인 인증 계정)
+- 구독자 전용 콘텐츠
+
+**사전조사:** 로그인 후 트래픽 한 세트 추가 캡처 필요. 만료/리프레시 동작 확인.
+
+**완료 기준:** 사용자가 NID 쿠키 입력 후 팔로잉 섹션과 19+ 콘텐츠 접근.
+
+---
+
+### 🅷 Group H — 채팅 & 도네이션 (Fragment UI 부활)
+**범위:** 신규 `chat/`, fragment 복원, `requiresResources=true`
+- VOD 채팅 오버레이 (`videos/{n}/chats`)
+- 라이브 채팅 WebSocket (`chatChannelId` → `chat.chzzk.naver.com`)
+- 도네이션 랭킹 표시
+- 채팅 룰 안내
+- 닉네임 색상 (`nickname/color/codes`)
+
+**전제:** CloudStream extension API가 라이브 채팅 오버레이를 허용하는지 확인 필요. 없으면 Provider Settings 안의 별도 화면으로 제공.
+
+**완료 기준:** 라이브 시청 중 우측 패널에 채팅 표시.
+
+---
+
+### 🅸 Group I — 라이브 부가 기능
+**범위:** `ChzzkProvider.kt::loadLive|loadLinks`, `models/Live.kt`
+- WatchParty 섹션 (`watchPartyType=NORMAL`)
+- 멀티뷰 (`livePlaybackJson.multiview[]`)
+- 타임머신 되감기 (`tm=true`, `timeMachineActive`)
+
+**완료 기준:** 같이보기 라이브가 별도 mainPage 섹션. 타임머신 활성 라이브에 "되감기 시작" 옵션.
+
+---
+
+### 🅹 Group J — 부가 메타데이터
+**범위:** `loadChannel`, `loadLive`의 plot/tags
+- 방송 알림 (CloudStream notification API)
+- 카페 연동 표시 (`cafe-connection`)
+- 로그파워 랭킹 (`log-power/rank/weekly`)
+- 스트리머 상점 (`streamer-shop/{id}/products`)
+
+**완료 기준:** 채널 페이지에 카페 링크와 팬덤 메트릭이 noticeably 노출.
+
+---
+
+### 🅺 Group K — 인프라 견고화
+**범위:** `ChzzkApi.kt`, `build.gradle.kts`, `strings.xml`
+- Provider Settings UI (fragment 부활) — Group H와 동시 가능
+- 재시도 / Backoff (`ChzzkApi.get` 래퍼 강화)
+- 응답 캐시 (메모리 LRU, 채널 메타 5분)
+- Telemetry opt-in (`POST /service/live-status`)
+- 다국어 (한국어/영어 `strings.xml`)
+- `ba.uuid` SharedPreferences 영속화
+
+**완료 기준:** 401/429 시 자동 재시도. 같은 채널 30초 내 재진입 시 네트워크 호출 없음.
+
+---
+
+### 🅻 Group L — 리버스 & 검증
+**범위:** 외부 조사 + 작은 패치들
+- `dt` 파라미터 정확한 알고리즘 리버스 (Chrome JS 분석)
+- Region 우회/안내 (`krOnlyViewing=true` 메시지)
+- CI Gradle 캐시 추가 (`.github/workflows/build.yml`)
+- Unit test (Jackson 파싱 회귀 — 캡처된 응답 fixture 활용)
+
+**완료 기준:** PR 빌드 시간 단축, 응답 스키마 변경에 대한 회귀 알람.
+
+---
+
+## 3. 작업 순서 (Phase)
 
 ```
-ChzzkProvider/src/main/kotlin/com/ouor/chzzk/
-├── ChzzkPlugin.kt
-├── ChzzkProvider.kt
-├── api/
-│   ├── ChzzkApi.kt          // app.get/post 래퍼, 공통 헤더
-│   └── Endpoints.kt         // URL 상수
-└── models/
-    ├── Envelope.kt          // ChzzkResponse<T> { code, message, content }
-    ├── Channel.kt           // ChannelInfo
-    ├── Live.kt              // LiveDetail, LiveSummary, LivePlayback
-    ├── Video.kt             // VideoDetail, VideoSummary
-    ├── Clip.kt
-    └── Search.kt
+Phase 1 — 기능 확장:           A → B → C
+Phase 2 — load 풍성:           D (+M 흡수)
+Phase 3 — 외부 의존 작업:       E (클립) → G (로그인)
+Phase 4 — 커뮤니티:             H (+I 함께)
+Phase 5 — 잔여 UX:              F, J
+Phase 6 — 인프라/품질:          K, L
 ```
 
-`@JsonIgnoreProperties(ignoreUnknown = true)` 일괄 적용. nullable 필드는 `?` 처리.
+### 병렬 가능 조합
+- **A + B** — 코드 영역 분리 (재생 vs 페이지네이션)
+- **K + H** — Group H가 fragment 부활을 시작하면 K의 settings UI 작업과 합쳐 한 번에
+- **L** — 단독 / 자투리 시간
 
-### 2.3 핵심 모델 스케치
-```kotlin
-data class ChzzkResponse<T>(
-    val code: Int,
-    val message: String?,
-    val content: T?
-)
-
-data class LiveDetail(
-    val liveId: Long,
-    val liveTitle: String,
-    val status: String,             // "OPEN" | "CLOSED"
-    val liveImageUrl: String?,      // {type} 자리표시자 포함
-    val openDate: String?,
-    val closeDate: String?,
-    val concurrentUserCount: Int,
-    val adult: Boolean,
-    val tags: List<String>?,
-    val categoryType: String?,
-    val liveCategory: String?,
-    val liveCategoryValue: String?,
-    val livePlaybackJson: String,   // 한 번 더 파싱
-    val channel: ChannelInfo,
-)
-
-data class LivePlayback(
-    val meta: PlaybackMeta,
-    val media: List<PlaybackMedia>,
-)
-data class PlaybackMedia(
-    val mediaId: String,            // "HLS" | "LLHLS"
-    val protocol: String,
-    val path: String,
-    val encodingTrack: List<EncodingTrack>?,
-)
-```
+### 권장 시작점: Phase 1 (Group A → B → C)
+v1.0의 가장 큰 약점은 **30개 이상 결과를 못 보고**, **화질 선택이 안 된다**는 것. Phase 1을 끝내면 사용자 체감이 가장 크게 변함.
 
 ---
 
-## 3. `mainPage` 구현 (2일차) ⭐
+## 4. 마일스톤 후보
 
-**목표:** 홈 화면에 인기 라이브/카테고리/추천 표시.
-
-### 3.1 Provider 설정
-```kotlin
-override val mainPage = mainPageOf(
-    "TOP_LIVES" to "인기 라이브",
-    "RECOMMENDED" to "추천 채널",
-    "GAME/League_of_Legends" to "리그 오브 레전드",
-    "GAME/Teamfight_Tactics" to "전략적 팀 전투",
-    "ETC/talk" to "잡담",
-    // 필요에 따라 카테고리 추가
-)
-```
-
-### 3.2 분기 처리
-- `TOP_LIVES` / 첫 진입: `GET /service/v1/topics/HOME/sub-topics/HOME/main?slotSize=5`
-  - `topLives[]`에서 `LiveSummary` 리스트 추출 → `LiveSearchResponse`
-- `RECOMMENDED`: `GET /service/v1/streamer-partners/recommended`
-- `GAME/...`, `ETC/...`: `GET /service/v2/categories/{type}/{id}/lives`
-  - 페이지네이션 cursor (`concurrentUserCount`, `liveId`) 보존 → `MainPageRequest.data`로 다음 페이지 호출 가능
-
-### 3.3 LiveSearchResponse 변환
-```kotlin
-private fun LiveSummary.toSearchResponse() = newLiveSearchResponse(
-    name = "${channel.channelName} · $liveTitle",
-    url = "$mainUrl/live/${channel.channelId}",
-    type = TvType.Live
-) {
-    posterUrl = liveImageUrl?.replace("{type}", "720")
-    apiName = this@ChzzkProvider.name
-}
-```
-
-**완료 기준:** 홈 화면에 최소 3개 섹션이 라이브 썸네일과 함께 출력됨.
-
----
-
-## 4. `search` 구현 (2일차)
-
-**목표:** 키워드로 채널/라이브/VOD 통합 검색.
-
-### 4.1 전략
-3개 엔드포인트를 병렬 호출 후 결합 (NiceHttp `parallelMap` 사용 가능):
-1. `GET /service/v1/search/channels?keyword=...&offset=0&size=20`
-2. `GET /service/v1/search/lives?keyword=...&offset=0&size=20`
-3. `GET /service/v1/search/videos?keyword=...&offset=0&size=20`
-
-### 4.2 결과 우선순위
-- 라이브 진행 중인 채널 (`channel.openLive == true`) 먼저
-- 라이브 검색 결과
-- VOD 검색 결과
-- 라이브 안 켠 채널
-
-### 4.3 `quickSearch` (옵션)
-`GET /service/v1/search/channels/auto-complete` — 단순 string list 반환이라 빠름. CloudStream의 `quickSearch`에 매핑.
-
-**완료 기준:** "강시나" 검색 시 채널/라이브/VOD가 적절히 노출.
-
----
-
-## 5. `load` 구현 (3-4일차) ⭐
-
-**목표:** 콘텐츠 상세 페이지 데이터 조립.
-
-### 5.1 URL 라우팅
-```kotlin
-override suspend fun load(url: String): LoadResponse? = when {
-    "/live/" in url   -> loadLive(extractChannelId(url))
-    "/video/" in url  -> loadVideo(extractVideoNo(url))
-    "/clips/" in url  -> loadClip(extractClipUID(url))
-    else              -> loadChannel(extractChannelId(url))   // 채널 묶음
-}
-```
-
-### 5.2 채널 라우트 (`loadChannel`)
-**병렬 호출:**
-- `GET /service/v1/channels/{id}` — 채널 메타
-- `GET /service/v3.3/channels/{id}/live-detail?cu=false&dt={hex}&tm=true` — 현재 라이브
-- `GET /service/v1/channels/{id}/videos?sortType=LATEST&pagingType=PAGE&page=0&size=30`
-
-**반환 형식:** `TvSeriesLoadResponse` (각 VOD를 episode로)
-- 라이브 진행 중이면 첫 episode를 LIVE로 추가
-- `name = channelName`, `posterUrl = channelImageUrl`, `plot = channelDescription`
-- `tags = ["치지직", liveCategoryValue]`
-
-### 5.3 라이브 라우트 (`loadLive`)
-- `GET /service/v3.3/channels/{id}/live-detail`
-- `LiveStreamLoadResponse` 반환
-  - `dataUrl = livePlaybackJson` 자체를 직접 넣지 않고, 직렬화된 식별자 + JSON을 dataUrl JSON으로 묶어 `loadLinks`에서 재파싱
-
-### 5.4 VOD 라우트 (`loadVideo`)
-- `GET /service/v3/videos/{videoNo}?dt={hex}`
-- `vodStatus != "NONE"` 체크 (만료된 다시보기 처리)
-- `MovieLoadResponse` 반환
-  - `dataUrl`에 `liveRewindPlaybackJson` 또는 videoNo
-
-### 5.5 클립 라우트 (`loadClip`)
-> ⚠️ 캡처에 클립 재생 엔드포인트가 빠져 있음. 다음 후보를 사전 조사 필요:
-> - `GET /service/v1/play-info/clip/{clipUID}` (추측)
-> - 클립 페이지 HTML scraping (`https://chzzk.naver.com/clips/{clipUID}`)
-> - 1차 출시에선 클립 비활성 후 추후 추가 가능
-
-### 5.6 헬퍼: `dt` 파라미터 생성
-```kotlin
-private fun randomDt(): String = (0..0xFFFFF).random().toString(16)
-```
-
----
-
-## 6. `loadLinks` 구현 (4일차) ⭐⭐
-
-**목표:** HLS 재생 URL 추출 → 플레이어로 전달.
-
-### 6.1 라이브
-1. `loadLinks(data)`에서 data를 다시 파싱 → `livePlaybackJson` 획득
-2. `media[]` 중 `mediaId == "HLS"` (또는 `LLHLS`도 별도 옵션) 선택
-3. `M3u8Helper.generateM3u8(name, path, referer = "https://chzzk.naver.com/")` 호출
-4. `callback(ExtractorLink)` 로 콜백
-
-### 6.2 다시보기
-1. `liveRewindPlaybackJson` 파싱
-2. `media[0].path` HLS master playlist
-3. 동일하게 `M3u8Helper.generateM3u8` 사용
-
-### 6.3 자막
-캡처 데이터엔 자막 트랙 미발견. 1차 출시 미지원, 추후 master m3u8 안의 `EXT-X-MEDIA TYPE=SUBTITLES` 파싱하여 `SubtitleFile` 추가 가능.
-
-### 6.4 검증 체크리스트
-- [ ] `hdnts` 토큰 만료 확인 (수 시간 단위)
-- [ ] LLHLS vs HLS 둘 다 재생되는지
-- [ ] 1080p/720p/480p variant가 master에 포함되는지
-- [ ] 다시보기 30분 영상 정상 시킹
-
----
-
-## 7. 에러 처리 & 견고성 (5일차)
-
-- [ ] **7.1** `ChzzkApi`에 envelope 검사 헬퍼: `code != 200`이면 `ErrorLoadingException(message)`
-- [ ] **7.2** 404 (`/service/v3/videos/{n}` 만료) 분기: friendly 메시지
-- [ ] **7.3** 성인 콘텐츠 (`adult: true`) 처리 — 비로그인 시 차단
-- [ ] **7.4** Region-locked (`krOnlyViewing: true`) 안내
-- [ ] **7.5** 모든 nullable 응답에 `*OrNull` 사용
-- [ ] **7.6** Jackson 미스매치 방지: `@JsonIgnoreProperties(ignoreUnknown = true)`
-- [ ] **7.7** `app.get` 타임아웃 / 재시도 정책 (NiceHttp 기본값으로 충분한지 확인)
-
----
-
-## 8. 페이지네이션 & UX 개선 (6일차)
-
-- [ ] **8.1** 카테고리 라이브 `cursor` 기반 다음 페이지 (`MainPageRequest.data`에 cursor 직렬화)
-- [ ] **8.2** 채널 VOD page-based 페이지네이션 (`page=N`)
-- [ ] **8.3** 검색 offset 페이지네이션 (`offset=N`)
-- [ ] **8.4** `LiveSummary.concurrentUserCount`를 부제로 노출 (`12,345명 시청 중`)
-- [ ] **8.5** `verifiedMark`인 채널은 이름 옆에 ✓ 표시 (subname)
-
----
-
-## 9. (선택) 로그인 지원
-
-- [ ] **9.1** `LoginAPI` 인터페이스 구현 — `NID_AUT`, `NID_SES` 쿠키 입력 받기
-- [ ] **9.2** 로그인 시 마이 채널 / 팔로잉 라이브 노출
-- [ ] **9.3** 19금 콘텐츠 접근 (성인 인증된 계정 한정)
-- [ ] **9.4** 본 캡처에 로그인 흐름 데이터 부족 — 추가 캡처 필요
-
-> 1차 출시 범위에서 제외 권장.
-
----
-
-## 10. 테스트 & 출시 (7일차)
-
-### 10.1 수동 회귀 테스트 (CloudStream 디버그 빌드)
-- [ ] 홈 화면 모든 섹션 로드
-- [ ] "강시나", "랄로" 등 한글 검색
-- [ ] 라이브 방송 재생 (1080p, 720p)
-- [ ] 다시보기 재생 + 시킹
-- [ ] 클립 재생 (구현 시)
-- [ ] 카테고리 → 라이브 진입
-- [ ] 페이지네이션 (스크롤)
-- [ ] 만료된 VOD 에러 메시지
-
-### 10.2 자동화
-- [ ] CI에서 `./gradlew assembleDebug` 통과
-- [ ] (선택) `ProviderTester` 등 CloudStream 헬퍼로 스모크 테스트
-
-### 10.3 배포
-- [ ] `version` bump (`build.gradle.kts`)
-- [ ] master에 push → builds 브랜치에 .cs3 자동 생성
-- [ ] JSON 저장소 (`repo.json`) 작성 — [API.md](API.md) §3 참고
-- [ ] README에 CloudStream에 추가하는 URL 안내
-
----
-
-## 11. 마일스톤 요약
-
-| 마일스톤 | 완료 기준 | 예상 |
+| 버전 | 포함 그룹 | 핵심 가치 |
 |---|---|---|
-| **M0** Bootstrap | 빌드 통과, builds 브랜치 산출 | 1일 |
-| **M1** Discovery MVP | mainPage + search 동작 | +2일 |
-| **M2** Playback MVP | 라이브 + VOD 재생 성공 | +2일 |
-| **M3** Hardening | 에러 처리, 페이지네이션, 검증 | +1일 |
-| **M4** Release v1.0 | repo.json 배포 | +1일 |
+| v1.1 | A, B | 화질 선택 + 무한 스크롤 |
+| v1.2 | C, D | 홈 다양화 + VOD 시리즈 경험 |
+| v1.3 | E | 클립 재생 |
+| v2.0 | G | 로그인 / 19+ / 팔로잉 |
+| v2.1 | H, I | 채팅 / WatchParty / 타임머신 |
+| v2.2 | F, J | 자동완성 / 부가 메타 |
+| v2.3 | K, L | 인프라 견고화 |
 
-**총 예상 기간: ~7일 (단독 개발 기준).**
+각 버전은 `ChzzkProvider/build.gradle.kts`의 `version` 정수를 1씩 증가.
 
 ---
 
-## 12. 미해결 질문 / 사전조사 필요
+## 5. 미해결 질문
 
-1. **클립 재생 URL** 엔드포인트 — 본 캡처에 없음. 클립 페이지에서 재캡처 필요.
-2. **`dt` 파라미터** 생성 알고리즘 — 빈 값/임의 값으로도 통과하는지 직접 호출 검증.
-3. **저지연 LLHLS** vs 일반 HLS — CloudStream의 ExoPlayer가 LLHLS를 잘 다루는지.
-4. **인증 게이팅** — 19금/구독 전용 콘텐츠가 비로그인 호출에서 어떤 에러를 내는지.
-5. **WatchParty / 멀티뷰** — `watchPartyType`, `multiview[]`이 별도 재생 흐름을 요구하는지.
-6. **광고 / 사전 광고** — `playerAdFlag.preRoll` true인 라이브에서 HLS 직접 재생 시 광고 우회 여부.
+1. **클립 재생 엔드포인트** — Group E 사전조사 (트래픽 캡처).
+2. **`dt` 파라미터** — 빈 값/임의 hex/정확한 알고리즘? Group L에서 검증.
+3. **LLHLS** — CloudStream ExoPlayer가 저지연 HLS의 `EXT-X-PART` 등을 처리하는지. Group A에서 실측.
+4. **CloudStream 채팅 오버레이** — extension에서 지원하는 표준 API가 있는지, 아니면 Provider Settings 화면으로 우회해야 하는지. Group H 시작 전 조사.
+5. **로그인 후 트래픽** — Group G 시작 전 NID 쿠키 보유 상태로 추가 캡처 필요.
+6. **자막 / 청각장애인 자막** — master m3u8 안에 `EXT-X-MEDIA TYPE=SUBTITLES` 포함 여부. Group A 부수 확인.
+7. **WatchParty 재생 흐름** — 일반 라이브와 동일한 `livePlaybackJson`인지 별도 인증 흐름인지. Group I 시작 전 캡처.
 
-이 질문들은 §1~§6 구현 중 자연스럽게 해결됨. 필요시 추가 트래픽 캡처를 진행.
+---
+
+## 6. 작업 원칙
+
+- 각 그룹 완료 시 한 commit (또는 작은 PR), 메시지 prefix는 그룹 코드 (`feat(A): ...`, `feat(B): ...`).
+- 모든 신규 파일은 `com.ouor.chzzk` 하위 적절한 서브패키지 (`api/`, `models/`, `auth/`, `chat/`).
+- Jackson DTO는 `@JsonIgnoreProperties(ignoreUnknown = true)` 필수, nullable 필드는 `?`.
+- `app.get`/`app.post` 직접 호출 금지 — 항상 `ChzzkApi`를 통해서.
+- 새 엔드포인트 추가 시 [API.md](API.md)에 동시 반영.
+- `--no-verify`, `--force-with-lease` 등 git 안전장치 비활성화 금지.
