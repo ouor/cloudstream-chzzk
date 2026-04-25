@@ -15,31 +15,27 @@ cloudstream {
 
     tvTypes = listOf("Live", "Movie")
 
-    // v1.2 brings the Provider Settings Fragment back, so we need resources
-    // (string table, layout xml). The fragment exposes NID cookie input,
-    // LLHLS toggle, and cache invalidation.
-    requiresResources = true
+    // The settings fragment is built programmatically in Kotlin (no XML, no
+    // R class lookup) so resources are not needed. Earlier attempts with
+    // `requiresResources = true` + R.layout.* crashed at runtime because
+    // the cloudstream gradle plugin's `make` task doesn't bundle the
+    // javac-produced R$layout / R$id classes into the .cs3 dex.
+    requiresResources = false
     language = "ko"
 
     iconUrl = "https://ssl.pstatic.net/static/nng/glive/icon/chzzk.png"
 }
 
-android {
-    buildFeatures {
-        buildConfig = true
-        // viewBinding intentionally disabled: the cloudstream gradle plugin's
-        // make task does not bundle the Java-compiled binding classes into
-        // the .cs3 dex, which causes a runtime NoClassDefFoundError when the
-        // settings fragment tries to inflate via the generated binding. The
-        // fragment uses findViewById instead, which is included in the
-        // Kotlin compile output.
-        viewBinding = false
-    }
-}
+// android.buildFeatures intentionally not customised — the cloudstream
+// gradle plugin only ships the Kotlin compile output to the .cs3 dex, so any
+// javac-only feature (viewBinding, dataBinding, R class lookups) crashes at
+// runtime with NoClassDefFoundError. The settings fragment is built entirely
+// in Kotlin views to stay inside that compile graph.
 
 dependencies {
-    // Material components for the settings fragment (TextInputLayout, Switch,
-    // BottomSheetDialogFragment).
+    // BottomSheetDialogFragment lives in Material — we still need it as a
+    // compile-time dep, but we deliberately do not use any Material widgets
+    // that require theme attributes the host activity may not provide.
     implementation("com.google.android.material:material:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
