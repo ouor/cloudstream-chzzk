@@ -489,7 +489,14 @@ class ChzzkProvider : MainAPI() {
 
     private suspend fun loadVideo(url: String, videoNo: Long): LoadResponse {
         val detail = fetchVideoDetail(videoNo)
-        if (detail.vodStatus != null && detail.vodStatus != "NONE") {
+        // vodStatus values seen in captures:
+        //   - "NONE"     — playable (used by /service/v3/videos/{n} for live-rewind VODs)
+        //   - "ABR_HLS"  — playable (multi-bitrate HLS, used by clips and many VODs)
+        // Anything else (e.g. "EXPIRED", "PROCESSING") means we cannot play.
+        // Earlier this guard rejected "ABR_HLS" by mistake and produced a
+        // user-visible "링크를 찾을 수 없음" toast.
+        val playableStatuses = setOf("NONE", "ABR_HLS")
+        if (detail.vodStatus != null && detail.vodStatus !in playableStatuses) {
             throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
         }
         if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
