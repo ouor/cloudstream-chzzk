@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.ouor.chzzk.auth.ChzzkAuth
 import com.ouor.chzzk.formatCurrency
 import com.ouor.chzzk.models.CafeConnection
 import com.ouor.chzzk.models.ChatRules
@@ -34,6 +35,37 @@ internal suspend fun fetchVideoDetail(videoNo: Long): VideoDetail {
     val res = parseJson<ChzzkResponse<VideoDetail>>(raw)
     ChzzkApi.checkOk(res.code, res.message, "video $videoNo")
     return res.content ?: throw ErrorLoadingException("video content 누락")
+}
+
+/**
+ * Fetch [VideoDetail] and validate it's actually playable. Both the
+ * search→VOD flow ([com.ouor.chzzk.loader.loadVideo]) and the
+ * channel→episode flow ([com.ouor.chzzk.loader.emitVodLinks] via loadLinks)
+ * call this so the same set of guards applies regardless of how the user
+ * arrived at the VOD. Throws [ErrorLoadingException] with a Korean message
+ * for the user; otherwise returns the validated detail.
+ *
+ * vodStatus values seen in captures:
+ *   - "NONE"     — playable (live-rewind VODs from /service/v3/videos/{n})
+ *   - "ABR_HLS"  — playable (multi-bitrate HLS, used by clips and many VODs)
+ *   - other      — EXPIRED / PROCESSING / etc., reject
+ *
+ * Earlier the guard rejected "ABR_HLS" by mistake and produced a
+ * user-visible "링크를 찾을 수 없음" toast.
+ */
+internal suspend fun fetchPlayableVideoDetail(videoNo: Long): VideoDetail {
+    val detail = fetchVideoDetail(videoNo)
+    val playableStatuses = setOf("NONE", "ABR_HLS")
+    if (detail.vodStatus != null && detail.vodStatus !in playableStatuses) {
+        throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
+    }
+    if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
+        throw ErrorLoadingException("성인 영상입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
+    }
+    if (detail.blindType != null) {
+        throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")
+    }
+    return detail
 }
 
 /**

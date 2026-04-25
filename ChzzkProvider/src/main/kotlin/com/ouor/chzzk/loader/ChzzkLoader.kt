@@ -17,7 +17,7 @@ import com.ouor.chzzk.api.augmentPlotWithCommunity
 import com.ouor.chzzk.api.fetchAllChannelVideos
 import com.ouor.chzzk.api.fetchLiveDetail
 import com.ouor.chzzk.api.fetchLiveRecommendations
-import com.ouor.chzzk.api.fetchVideoDetail
+import com.ouor.chzzk.api.fetchPlayableVideoDetail
 import com.ouor.chzzk.auth.ChzzkAuth
 import com.ouor.chzzk.buildPlot
 import com.ouor.chzzk.buildTags
@@ -58,23 +58,7 @@ internal suspend fun MainAPI.loadLive(url: String, channelId: String): LoadRespo
 }
 
 internal suspend fun MainAPI.loadVideo(url: String, videoNo: Long): LoadResponse {
-    val detail = fetchVideoDetail(videoNo)
-    // vodStatus values seen in captures:
-    //   - "NONE"     — playable (used by /service/v3/videos/{n} for live-rewind VODs)
-    //   - "ABR_HLS"  — playable (multi-bitrate HLS, used by clips and many VODs)
-    // Anything else (e.g. "EXPIRED", "PROCESSING") means we cannot play.
-    // Earlier this guard rejected "ABR_HLS" by mistake and produced a
-    // user-visible "링크를 찾을 수 없음" toast.
-    val playableStatuses = setOf("NONE", "ABR_HLS")
-    if (detail.vodStatus != null && detail.vodStatus !in playableStatuses) {
-        throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
-    }
-    if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
-        throw ErrorLoadingException("성인 영상입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
-    }
-    if (detail.blindType != null) {
-        throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")
-    }
+    val detail = fetchPlayableVideoDetail(videoNo)
     // Surface prev/next VOD navigation + same-channel recommendations.
     val nav = listOfNotNull(
         detail.prevVideo?.let { toMovieSearchResponse(it, detail.channel?.channelName, prefix = "← 이전: ") },
@@ -182,25 +166,33 @@ internal suspend fun MainAPI.loadChannel(url: String, channelId: String): LoadRe
         .filter { it.blindType == null && (!it.adult || isLoggedIn) }
 
     val episodes = mutableListOf<Episode>()
+    // fix=false stops CloudStream from resolving Episode.data against
+    // mainUrl. Without it, "VOD|12345|title|" gets rewritten to
+    // "https://chzzk.naver.com/VOD|12345|title|" before reaching loadLinks,
+    // which then fails PlayLink.decode and surfaces "링크를 찾을 수 없음".
     if (live != null) {
         episodes += newEpisode(
-            data = PlayLink(PlayLink.Kind.LIVE, channelId, live.liveTitle).encode(),
-        ) {
-            name = "🔴 LIVE · ${live.liveTitle ?: "방송 중"}"
-            posterUrl = live.liveImageUrl?.let { fillThumb(it) }
-            description = "현재 ${live.concurrentUserCount}명 시청 중"
-            episode = 0
-        }
+            url = PlayLink(PlayLink.Kind.LIVE, channelId, live.liveTitle).encode(),
+            initializer = {
+                name = "🔴 LIVE · ${live.liveTitle ?: "방송 중"}"
+                posterUrl = live.liveImageUrl?.let { fillThumb(it) }
+                description = "현재 ${live.concurrentUserCount}명 시청 중"
+                episode = 0
+            },
+            fix = false,
+        )
     }
     videos.forEachIndexed { index, video ->
         episodes += newEpisode(
-            data = PlayLink(PlayLink.Kind.VOD, video.videoNo.toString(), video.videoTitle).encode(),
-        ) {
-            name = video.videoTitle
-            posterUrl = video.thumbnailImageUrl
-            description = video.publishDate
-            episode = index + 1
-        }
+            url = PlayLink(PlayLink.Kind.VOD, video.videoNo.toString(), video.videoTitle).encode(),
+            initializer = {
+                name = video.videoTitle
+                posterUrl = video.thumbnailImageUrl
+                description = video.publishDate
+                episode = index + 1
+            },
+            fix = false,
+        )
     }
 
     val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
