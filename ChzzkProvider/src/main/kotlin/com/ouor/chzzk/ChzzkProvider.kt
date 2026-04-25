@@ -80,8 +80,9 @@ class ChzzkProvider : MainAPI() {
         val home = res.content ?: return emptyList()
         val seen = mutableSetOf<Long>()
         return buildList {
-            home.topLives.forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
-            home.slots.flatMap { it.slotContents }.forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
+            home.topLives.filterNot { it.adult }.forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
+            home.slots.flatMap { it.slotContents }.filterNot { it.adult }
+                .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
         }
     }
 
@@ -107,7 +108,7 @@ class ChzzkProvider : MainAPI() {
         val raw = ChzzkApi.get(Endpoints.categoryLives(type, id, size = 30)).text
         val res = parseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "category lives $key")
-        return res.content?.data.orEmpty().map { it.toSearchResponse() }
+        return res.content?.data.orEmpty().filterNot { it.adult }.map { it.toSearchResponse() }
     }
 
     // ----------------------------------------------------------------- search
@@ -187,6 +188,12 @@ class ChzzkProvider : MainAPI() {
         if (detail.status != "OPEN") {
             throw ErrorLoadingException("이 채널은 현재 방송 중이 아닙니다.")
         }
+        if (detail.adult) {
+            throw ErrorLoadingException("성인 인증이 필요한 방송입니다. (로그인 미지원)")
+        }
+        if (detail.blindType != null) {
+            throw ErrorLoadingException("이 방송은 시청이 제한되었습니다 (${detail.blindType}).")
+        }
         return newLiveStreamLoadResponse(
             name = detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live",
             url = url,
@@ -202,6 +209,12 @@ class ChzzkProvider : MainAPI() {
         val detail = fetchVideoDetail(videoNo)
         if (detail.vodStatus != null && detail.vodStatus != "NONE") {
             throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
+        }
+        if (detail.adult) {
+            throw ErrorLoadingException("성인 인증이 필요한 영상입니다. (로그인 미지원)")
+        }
+        if (detail.blindType != null) {
+            throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")
         }
         return newMovieLoadResponse(
             name = detail.videoTitle ?: "video #$videoNo",
@@ -392,14 +405,24 @@ class ChzzkProvider : MainAPI() {
         return PlayLink(kind = kind, id = parts[1], title = parts.getOrNull(2)?.takeIf { it.isNotBlank() })
     }
 
-    private fun LiveSummary.toSearchResponse(): LiveSearchResponse =
-        newLiveSearchResponse(
-            name = "${channel.channelName ?: channel.channelId} · ${liveTitle ?: ""}".trim(),
+    private fun LiveSummary.toSearchResponse(): LiveSearchResponse {
+        val verified = if (channel.verifiedMark) "✓ " else ""
+        val viewers = if (concurrentUserCount > 0) " · ${formatViewers(concurrentUserCount)}" else ""
+        val title = "$verified${channel.channelName ?: channel.channelId}$viewers"
+        return newLiveSearchResponse(
+            name = if (liveTitle.isNullOrBlank()) title else "$title · $liveTitle",
             url = Urls.live(channel.channelId),
             type = TvType.Live,
         ) {
             posterUrl = liveImageUrl?.let { fillThumb(it) } ?: defaultThumbnailImageUrl ?: channel.channelImageUrl
         }
+    }
+
+    private fun formatViewers(count: Int): String = when {
+        count >= 10000 -> "%.1f만명".format(count / 10000.0)
+        count >= 1000 -> "${count / 1000}.${(count % 1000) / 100}천명"
+        else -> "${count}명"
+    }
 
     private fun VideoSummary.toMovieSearchResponse(channelName: String?): MovieSearchResponse {
         val title = listOfNotNull(channelName, videoTitle).joinToString(" · ").ifBlank { "video #$videoNo" }
