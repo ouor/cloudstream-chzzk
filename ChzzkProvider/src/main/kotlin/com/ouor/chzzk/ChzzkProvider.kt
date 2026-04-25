@@ -396,10 +396,27 @@ class ChzzkProvider : MainAPI() {
     }
 
     private suspend fun loadClip(url: String, clipUID: String): LoadResponse {
-        // Clip playback endpoint not yet covered by the captured spec — see
-        // PLAN.md §12. Surface a friendly error so the entry is at least
-        // routable from search results.
-        throw ErrorLoadingException("클립 재생은 아직 지원되지 않습니다 ($clipUID).")
+        // Best-effort clip support: the official capture set does not include a
+        // clip play-info endpoint, so we fetch the public clip web page and
+        // scrape the embedded playback metadata. This works because Chzzk
+        // ships a Next.js-style __NEXT_DATA__ JSON blob containing the same
+        // information the real player uses.
+        val pageHtml = runCatching { ChzzkApi.get(Urls.clip(clipUID)).text }.getOrNull()
+            ?: throw ErrorLoadingException("클립 페이지를 불러오지 못했습니다 ($clipUID).")
+        val clip = ClipScraper.parse(pageHtml)
+            ?: throw ErrorLoadingException(
+                "클립 재생 정보를 찾지 못했습니다. 사이트 구조가 바뀌었을 수 있습니다 ($clipUID)."
+            )
+        return newMovieLoadResponse(
+            name = clip.title ?: "Chzzk Clip",
+            url = url,
+            type = TvType.Movie,
+            dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.CLIP, clipUID, clip.title)),
+        ) {
+            posterUrl = clip.thumbnailUrl
+            plot = clip.channelName?.let { "채널: $it" }
+            duration = clip.durationSec?.let { (it / 60).takeIf { m -> m > 0 } }
+        }
     }
 
     private suspend fun loadChannel(url: String, channelId: String): LoadResponse {
@@ -464,7 +481,44 @@ class ChzzkProvider : MainAPI() {
         return when (link.kind) {
             PlayLink.Kind.LIVE -> emitLiveLinks(link.id, link.title, callback)
             PlayLink.Kind.VOD -> emitVodLinks(link.id.toLong(), link.title, callback)
+            PlayLink.Kind.CLIP -> emitClipLinks(link.id, link.title, callback)
         }
+    }
+
+    private suspend fun emitClipLinks(
+        clipUID: String,
+        title: String?,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        // Re-fetch the page to get a fresh playback URL — these tokens expire
+        // similarly to live HLS auth tokens.
+        val html = ChzzkApi.get(Urls.clip(clipUID)).text
+        val clip = ClipScraper.parse(html) ?: return false
+        val streamUrl = clip.playbackUrl ?: return false
+        val sourceLabel = "$name (clip)"
+        val variants = runCatching {
+            M3u8Helper.generateM3u8(
+                source = sourceLabel,
+                streamUrl = streamUrl,
+                referer = Urls.WEB_BASE,
+            )
+        }.getOrNull()
+        if (!variants.isNullOrEmpty()) {
+            variants.forEach(callback)
+            return true
+        }
+        callback(
+            ExtractorLink(
+                source = sourceLabel,
+                name = "$sourceLabel · ${title ?: clipUID}",
+                url = streamUrl,
+                referer = Urls.WEB_BASE,
+                quality = 0,
+                isM3u8 = streamUrl.contains(".m3u8"),
+                type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+            )
+        )
+        return true
     }
 
     private suspend fun emitLiveLinks(

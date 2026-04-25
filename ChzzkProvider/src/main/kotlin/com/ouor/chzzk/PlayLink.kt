@@ -13,5 +13,5 @@ data class PlayLink(
     val id: String,
     val title: String? = null,
 ) {
-    enum class Kind { LIVE, VOD }
+    enum class Kind { LIVE, VOD, CLIP }
 }
