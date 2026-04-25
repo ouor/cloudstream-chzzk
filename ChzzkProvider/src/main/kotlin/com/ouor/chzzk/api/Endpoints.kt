@@ -9,6 +9,15 @@ object Endpoints {
 
     fun streamerPartners() = "$API_BASE/service/v1/streamer-partners/recommended"
 
+    fun popularCategories(size: Int = 20) =
+        "$API_BASE/service/v1/categories/live?size=$size"
+
+    fun programSchedulesComing() =
+        "$API_BASE/service/v1/program-schedules/coming"
+
+    fun banners(deviceType: String = "PC", positionsIn: String = "HOME_SCHEDULE") =
+        "$API_BASE/service/v1/banners?deviceType=$deviceType&positionsIn=$positionsIn"
+
     fun categoryLives(
         categoryType: String,
         categoryId: String,

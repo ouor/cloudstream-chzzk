@@ -34,6 +34,8 @@ import com.ouor.chzzk.models.LiveDetail
 import com.ouor.chzzk.models.LivePlayback
 import com.ouor.chzzk.models.LiveSummary
 import com.ouor.chzzk.models.PageData
+import com.ouor.chzzk.models.ProgramSchedule
+import com.ouor.chzzk.models.ProgramScheduleList
 import com.ouor.chzzk.models.SearchChannelItem
 import com.ouor.chzzk.models.StreamerPartnerList
 import com.ouor.chzzk.models.VideoDetail
@@ -52,11 +54,17 @@ class ChzzkProvider : MainAPI() {
     override val mainPage = mainPageOf(
         SECTION_HOME to "인기 라이브",
         SECTION_PARTNERS to "파트너 스트리머",
+        SECTION_SCHEDULE to "📅 방송 예정",
         "GAME/League_of_Legends" to "리그 오브 레전드",
         "GAME/Teamfight_Tactics" to "전략적 팀 전투",
         "GAME/VALORANT" to "발로란트",
         "GAME/Overwatch_2" to "오버워치 2",
+        "GAME/StarCraft" to "스타크래프트",
+        "GAME/Minecraft" to "마인크래프트",
+        "GAME/PUBG_BATTLEGROUNDS" to "배틀그라운드",
         "ETC/talk" to "잡담",
+        "ETC/sports" to "스포츠",
+        "ETC/music" to "음악",
     )
 
     // --------------------------------------------------------------- mainPage
@@ -83,6 +91,10 @@ class ChzzkProvider : MainAPI() {
                 items = loadPartners()
                 hasNext = false
             }
+            SECTION_SCHEDULE -> {
+                items = loadSchedule()
+                hasNext = false
+            }
             else -> {
                 val (loaded, more) = loadCategoryPage(key, page)
                 items = loaded
@@ -105,6 +117,28 @@ class ChzzkProvider : MainAPI() {
             home.topLives.filterNot { it.adult }.forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
             home.slots.flatMap { it.slotContents }.filterNot { it.adult }
                 .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
+        }
+    }
+
+    private suspend fun loadSchedule(): List<SearchResponse> {
+        val raw = ChzzkApi.get(Endpoints.programSchedulesComing()).text
+        val res = parseJson<ChzzkResponse<ProgramScheduleList>>(raw)
+        ChzzkApi.checkOk(res.code, res.message, "program-schedules")
+        return res.content?.programSchedules.orEmpty().map { it.toSearchResponse() }
+    }
+
+    private fun ProgramSchedule.toSearchResponse(): LiveSearchResponse {
+        val ch = channel
+        val title = listOfNotNull(scheduleDate, scheduleTitle).joinToString(" · ")
+        val name = listOfNotNull(ch?.channelName, title).joinToString(" — ")
+            .ifBlank { scheduleTitle ?: "방송 예정" }
+        val targetUrl = if (ch != null) Urls.channel(ch.channelId) else Urls.WEB_BASE
+        return newLiveSearchResponse(
+            name = name,
+            url = targetUrl,
+            type = TvType.Live,
+        ) {
+            posterUrl = ch?.channelImageUrl
         }
     }
 
@@ -217,17 +251,30 @@ class ChzzkProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
+
+        // Tag search: a leading `#` switches to tag-membership filtering — the
+        // base API has no dedicated tag endpoint, so we fan out the same query
+        // (sans `#`) and post-filter results whose tags[] contains the term.
+        val isTagSearch = query.startsWith("#")
+        val effectiveQuery = if (isTagSearch) query.removePrefix("#").trim() else query
+        if (effectiveQuery.isBlank()) return emptyList()
+        val tagFilter: ((List<String>?) -> Boolean) = if (isTagSearch) {
+            { tags -> tags?.any { it.equals(effectiveQuery, ignoreCase = true) } == true }
+        } else {
+            { _ -> true }
+        }
+
         val results = mutableListOf<SearchResponse>()
         val seenChannels = mutableSetOf<String>()
         val seenVideos = mutableSetOf<Long>()
 
         runCatching {
-            val raw = ChzzkApi.get(Endpoints.searchChannels(query)).text
+            val raw = ChzzkApi.get(Endpoints.searchChannels(effectiveQuery)).text
             val res = tryParseJson<ChzzkResponse<PageData<SearchChannelItem>>>(raw)
             res?.content?.data.orEmpty().forEach { item ->
                 if (!seenChannels.add(item.channel.channelId)) return@forEach
                 val live = item.content?.live
-                if (live != null && live.status == "OPEN") {
+                if (live != null && live.status == "OPEN" && tagFilter(live.tags)) {
                     results += newLiveSearchResponse(
                         name = "${item.channel.channelName ?: item.channel.channelId} · ${live.liveTitle ?: ""}".trim(),
                         url = Urls.live(item.channel.channelId),
@@ -235,7 +282,7 @@ class ChzzkProvider : MainAPI() {
                     ) {
                         posterUrl = live.liveImageUrl?.let { fillThumb(it) } ?: item.channel.channelImageUrl
                     }
-                } else {
+                } else if (!isTagSearch) {
                     results += newLiveSearchResponse(
                         name = item.channel.channelName ?: item.channel.channelId,
                         url = Urls.channel(item.channel.channelId),
@@ -245,6 +292,7 @@ class ChzzkProvider : MainAPI() {
                     }
                 }
                 item.content?.videos.orEmpty().take(3).forEach { video ->
+                    if (!tagFilter(video.tags)) return@forEach
                     if (seenVideos.add(video.videoNo)) {
                         results += video.toMovieSearchResponse(item.channel.channelName)
                     }
@@ -253,17 +301,19 @@ class ChzzkProvider : MainAPI() {
         }
 
         runCatching {
-            val raw = ChzzkApi.get(Endpoints.searchLives(query)).text
+            val raw = ChzzkApi.get(Endpoints.searchLives(effectiveQuery)).text
             val res = tryParseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
             res?.content?.data.orEmpty().forEach { live ->
+                if (!tagFilter(live.tags)) return@forEach
                 if (seenChannels.add(live.channel.channelId)) results += live.toSearchResponse()
             }
         }
 
         runCatching {
-            val raw = ChzzkApi.get(Endpoints.searchVideos(query)).text
+            val raw = ChzzkApi.get(Endpoints.searchVideos(effectiveQuery)).text
             val res = tryParseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
             res?.content?.data.orEmpty().forEach { video ->
+                if (!tagFilter(video.tags)) return@forEach
                 if (seenVideos.add(video.videoNo)) {
                     results += video.toMovieSearchResponse(video.channel?.channelName)
                 }
@@ -608,6 +658,7 @@ class ChzzkProvider : MainAPI() {
     companion object {
         private const val SECTION_HOME = "__HOME__"
         private const val SECTION_PARTNERS = "__PARTNERS__"
+        private const val SECTION_SCHEDULE = "__SCHEDULE__"
 
         /** Hard cap on VODs collected per channel page (4 API pages). */
         private const val MAX_CHANNEL_VIDEOS = 120
