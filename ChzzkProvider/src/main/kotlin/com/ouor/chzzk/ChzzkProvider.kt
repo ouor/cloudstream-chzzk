@@ -495,9 +495,10 @@ class ChzzkProvider : MainAPI() {
             year = detail.publishDate?.take(4)?.toIntOrNull()
             duration = (detail.duration / 60L).toInt().takeIf { it > 0 }
             recommendations = nav + channelRecs
-            // CloudStream renders a "trailer" affordance when present; reuse
-            // Chzzk's pre-roll trailer file when available.
-            detail.trailerUrl?.let { addTrailer(it, referer = Urls.WEB_BASE) }
+            // Chzzk pre-roll trailer is stitched into the VOD itself, so we
+            // do not surface it as a separate LoadResponse.addTrailer entry —
+            // the cloudstream stub does not expose a stable addTrailer API
+            // for arbitrary mp4 URLs anyway.
         }
     }
 
@@ -654,7 +655,6 @@ class ChzzkProvider : MainAPI() {
                 url = streamUrl,
                 referer = Urls.WEB_BASE,
                 quality = 0,
-                isM3u8 = streamUrl.contains(".m3u8"),
                 type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
             )
         )
@@ -690,7 +690,6 @@ class ChzzkProvider : MainAPI() {
                     url = path,
                     referer = Urls.WEB_BASE,
                     quality = 0,
-                    isM3u8 = isM3u8,
                     type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
                 )
             )
@@ -764,7 +763,6 @@ class ChzzkProvider : MainAPI() {
                         url = media.path,
                         referer = Urls.WEB_BASE,
                         quality = qualityFromTracks(media.encodingTrack),
-                        isM3u8 = true,
                         type = ExtractorLinkType.M3U8,
                     )
                 )

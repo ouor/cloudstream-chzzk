@@ -4,7 +4,6 @@ import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.NiceResponse
 import com.ouor.chzzk.auth.ChzzkAuth
-import kotlinx.coroutines.delay
 
 /**
  * Centralized HTTP client for Chzzk. All Provider code should funnel through
@@ -51,6 +50,18 @@ object ChzzkApi {
     private val RETRY_DELAYS_MS = longArrayOf(0L, 400L, 1200L)
 
     /**
+     * Lightweight sleep for retry back-off. Uses Thread.sleep directly; `app.get`
+     * runs on an IO dispatcher so blocking the thread for a few hundred ms is
+     * the same shape NiceHttp itself uses internally. We avoid
+     * `kotlinx.coroutines.delay` so we do not need a hard dependency on the
+     * coroutines API surface, which the cloudstream stub jar does not expose.
+     */
+    private fun sleepFor(ms: Long) {
+        if (ms <= 0L) return
+        try { Thread.sleep(ms) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+    }
+
+    /**
      * Live request, no cache. Returns the raw NiceResponse so callers needing
      * headers/status can introspect them. The retry/back-off and auth header
      * injection still apply.
@@ -67,14 +78,14 @@ object ChzzkApi {
                 // client errors (those are deterministic and won't recover).
                 if (response.code in 500..599 || response.code == 429) {
                     lastError = RuntimeException("HTTP ${response.code}")
-                    delay(RETRY_DELAYS_MS[attempt])
+                    sleepFor(RETRY_DELAYS_MS[attempt])
                     continue
                 }
                 return response
             } catch (e: Throwable) {
                 lastError = e
                 if (attempt < MAX_RETRIES - 1) {
-                    delay(RETRY_DELAYS_MS[attempt])
+                    sleepFor(RETRY_DELAYS_MS[attempt])
                 }
             }
         }
