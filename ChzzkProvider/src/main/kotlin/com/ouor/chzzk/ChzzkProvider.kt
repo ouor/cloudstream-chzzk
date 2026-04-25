@@ -28,9 +28,12 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.api.Endpoints
 import com.ouor.chzzk.auth.ChzzkAuth
+import com.ouor.chzzk.models.CafeConnection
 import com.ouor.chzzk.models.ChatRules
 import com.ouor.chzzk.models.DonationRankResponse
 import com.ouor.chzzk.models.DonationRanker
+import com.ouor.chzzk.models.LogPowerWeekly
+import com.ouor.chzzk.models.StreamerShopProducts
 import com.ouor.chzzk.models.ChannelInfo
 import com.ouor.chzzk.models.ChzzkResponse
 import com.ouor.chzzk.models.HomeMain
@@ -858,9 +861,10 @@ class ChzzkProvider : MainAPI() {
     }
 
     /**
-     * Append weekly donation top-N and chat rule snippet to a base plot.
-     * Both fetches are best-effort — failures are silently swallowed since
-     * the plot is metadata enrichment, not core functionality.
+     * Append weekly donation top-N, chat rules, café connection, and shop
+     * info to a base plot. All fetches are best-effort — failures are
+     * silently swallowed because the plot is metadata enrichment, not
+     * core functionality.
      */
     private suspend fun augmentPlotWithCommunity(base: String, channelId: String): String {
         val rankers = runCatching {
@@ -874,6 +878,21 @@ class ChzzkProvider : MainAPI() {
             parseJson<ChzzkResponse<ChatRules>>(raw).content
         }.getOrNull()
 
+        val cafe = runCatching {
+            val raw = ChzzkApi.get(Endpoints.channelCafeConnection(channelId)).text
+            parseJson<ChzzkResponse<CafeConnection>>(raw).content
+        }.getOrNull()
+
+        val logPower = runCatching {
+            val raw = ChzzkApi.get(Endpoints.logPowerWeekly(channelId)).text
+            parseJson<ChzzkResponse<LogPowerWeekly>>(raw).content
+        }.getOrNull()
+
+        val shop = runCatching {
+            val raw = ChzzkApi.get(Endpoints.streamerShopProducts(channelId)).text
+            parseJson<ChzzkResponse<StreamerShopProducts>>(raw).content
+        }.getOrNull()
+
         return buildString {
             append(base)
             if (rankers.isNotEmpty()) {
@@ -883,6 +902,21 @@ class ChzzkProvider : MainAPI() {
                     val verified = if (r.verifiedMark) "✓ " else ""
                     appendLine("${r.ranking}. $verified${r.nickName ?: "익명"} — ${formatCurrency(r.donationAmount)}")
                 }
+            }
+            if (logPower != null && logPower.rankList.isNotEmpty()) {
+                appendLine().appendLine()
+                appendLine("⚡ 주간 로그파워 TOP")
+                logPower.rankList.take(3).forEach { r ->
+                    appendLine("${r.ranking}. ${r.nickName ?: "익명"} — ${formatCurrency(r.logPower)} LP")
+                }
+            }
+            if (cafe?.cafe != null && !cafe.cafe.name.isNullOrBlank()) {
+                appendLine().appendLine()
+                append("☕ 연결된 카페: ${cafe.cafe.name}")
+            }
+            if (shop != null && shop.totalCount > 0) {
+                appendLine().appendLine()
+                append("🛒 스트리머 상점: ${shop.totalCount}개 상품")
             }
             if (rules != null && !rules.rule.isNullOrBlank()) {
                 appendLine().appendLine()

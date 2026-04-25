@@ -87,6 +87,15 @@ object Endpoints {
 
     fun nicknameColorCodes() = "$API_BASE/service/v2/nickname/color/codes"
 
+    fun channelCafeConnection(channelId: String) =
+        "$API_BASE/service/v1/channels/$channelId/cafe-connection"
+
+    fun logPowerWeekly(channelId: String) =
+        "$API_BASE/service/v1/channels/$channelId/log-power/rank/weekly"
+
+    fun streamerShopProducts(channelId: String, catalogType: String = "CATALOG") =
+        "$API_BASE/commercial/v1/streamer-shop/$channelId/products?catalogType=$catalogType"
+
     private fun randomDt(): String =
         (0..0xFFFFF).random().toString(16)
 
