@@ -14,6 +14,12 @@ on:
     paths-ignore:
       - '*.md'
 
+permissions:
+  # Required so the workflow's GITHUB_TOKEN can force-push the generated
+  # .cs3 artifacts and plugins.json to the `builds` branch. Default is
+  # read-only on new repos.
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
