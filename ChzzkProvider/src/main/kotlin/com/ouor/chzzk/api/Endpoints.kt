@@ -9,6 +9,14 @@ object Endpoints {
 
     fun streamerPartners() = "$API_BASE/service/v1/streamer-partners/recommended"
 
+    /**
+     * Followed channels currently live. NID auth required — anonymous calls
+     * return code != 200. Discovered in the 2026-04-26 HAR (live session).
+     * Response shape mirrors `category-lives`: a [PageData] of [LiveSummary].
+     */
+    fun followingsLive(size: Int = 30) =
+        "$API_BASE/service/v1/channels/followings/live?size=$size"
+
     fun popularCategories(size: Int = 20) =
         "$API_BASE/service/v1/categories/live?size=$size"
 

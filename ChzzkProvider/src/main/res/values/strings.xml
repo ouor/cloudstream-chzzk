@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chzzk_settings_title">치지직 플러그인 설정</string>
+
+    <string name="chzzk_section_login">로그인 (NID 쿠키)</string>
+    <string name="chzzk_login_explainer">naver.com에 로그인한 브라우저의 개발자 도구 → Application → Cookies → chzzk.naver.com 에서 NID_AUT, NID_SES 값을 복사해 붙여넣으세요. 로그인하면 19+ 콘텐츠와 팔로잉 라이브 섹션을 사용할 수 있습니다.</string>
+    <string name="chzzk_hint_nid_aut">NID_AUT</string>
+    <string name="chzzk_hint_nid_ses">NID_SES</string>
+    <string name="chzzk_action_save_login">저장 및 로그인</string>
+    <string name="chzzk_action_logout">로그아웃</string>
+    <string name="chzzk_login_status_in">✅ 로그인됨</string>
+    <string name="chzzk_login_status_out">⛔ 비로그인 상태</string>
+
+    <string name="chzzk_section_playback">재생 옵션</string>
+    <string name="chzzk_switch_llhls">저지연 (LLHLS) 우선 재생</string>
+    <string name="chzzk_switch_llhls_desc">활성화 시 일반 HLS 대신 저지연 HLS 변형을 플레이어 메뉴 상단에 노출합니다.</string>
+
+    <string name="chzzk_section_cache">캐시</string>
+    <string name="chzzk_action_clear_cache">메모리 캐시 비우기</string>
+    <string name="chzzk_cache_explainer">채널 메타·도네이션 랭킹 등 5분 캐시를 즉시 삭제합니다. 로그인 직후 적용을 위해 사용하세요.</string>
+
+    <string name="chzzk_section_status">지원 기능</string>
+    <string name="chzzk_feature_list">• 라이브 / 다시보기 HLS 재생\n• 클립 재생 (api-videohub.naver.com play-info)\n• 검색 (\#태그, live:, vod:, channel: 접두어)\n• 카테고리·홈·파트너·방송 예정 섹션\n• 도네이션·로그파워·카페·상점 메타데이터</string>
+
+    <string name="chzzk_toast_saved">저장되었습니다</string>
+    <string name="chzzk_toast_cleared">캐시를 비웠습니다</string>
+    <string name="chzzk_toast_logged_out">로그아웃되었습니다</string>
+    <string name="chzzk_toast_login_blank">NID_AUT, NID_SES 둘 다 입력해주세요</string>
+</resources>

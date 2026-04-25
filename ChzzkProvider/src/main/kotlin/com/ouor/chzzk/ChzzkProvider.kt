@@ -28,6 +28,7 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.api.Endpoints
 import com.ouor.chzzk.auth.ChzzkAuth
+import com.ouor.chzzk.settings.ChzzkSettings
 import com.ouor.chzzk.models.CafeConnection
 import com.ouor.chzzk.models.ChatRules
 import com.ouor.chzzk.models.ClipDetail
@@ -62,6 +63,7 @@ class ChzzkProvider : MainAPI() {
     override val hasQuickSearch = true
 
     override val mainPage = mainPageOf(
+        SECTION_FOLLOWING to "⭐ 팔로잉 라이브",
         SECTION_HOME to "인기 라이브",
         SECTION_PARTNERS to "파트너 스트리머",
         SECTION_SCHEDULE to "📅 방송 예정",
@@ -93,6 +95,10 @@ class ChzzkProvider : MainAPI() {
         val items: List<SearchResponse>
         val hasNext: Boolean
         when (key) {
+            SECTION_FOLLOWING -> {
+                items = loadFollowings()
+                hasNext = false
+            }
             SECTION_HOME -> {
                 items = loadHome()
                 hasNext = false
@@ -132,6 +138,22 @@ class ChzzkProvider : MainAPI() {
                 .filterNot { hideAdult && it.adult }
                 .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
         }
+    }
+
+    /**
+     * Followed channels currently live. Requires NID auth — for anonymous
+     * users this section is silently empty (the API returns code != 200,
+     * which we swallow rather than surfacing as an error). When the user
+     * later logs in via the settings fragment + invalidates cache, the
+     * section will populate on the next mainPage refresh.
+     */
+    private suspend fun loadFollowings(): List<SearchResponse> {
+        if (!ChzzkAuth.current().isLoggedIn) return emptyList()
+        val raw = runCatching { ChzzkApi.getText(Endpoints.followingsLive(size = 30)) }
+            .getOrNull() ?: return emptyList()
+        val res = runCatching { parseJson<ChzzkResponse<PageData<LiveSummary>>>(raw) }.getOrNull()
+        if (res?.code != 200) return emptyList()
+        return res.content?.data.orEmpty().map { it.toSearchResponse() }
     }
 
     private suspend fun loadSchedule(): List<SearchResponse> {
@@ -766,10 +788,16 @@ class ChzzkProvider : MainAPI() {
         // M3u8Helper.generateM3u8 fetches the master and returns one
         // ExtractorLink per EXT-X-STREAM-INF variant, giving the player a
         // proper quality menu (1080p / 720p / 480p / 360p / 144p).
+        //
+        // Order is normally HLS-first, but the user can flip the preference
+        // via the settings fragment (ChzzkSettings.preferLowLatency). When
+        // flipped, LLHLS is sorted first so the player auto-selects the
+        // low-latency variant.
+        val preferLlhls = ChzzkSettings.current().preferLowLatency
         val ordered = mediaList.sortedBy {
             when (it.mediaId) {
-                "HLS" -> 0
-                "LLHLS" -> 1
+                "HLS" -> if (preferLlhls) 1 else 0
+                "LLHLS" -> if (preferLlhls) 0 else 1
                 else -> 2
             }
         }
@@ -1038,6 +1066,7 @@ class ChzzkProvider : MainAPI() {
     }
 
     companion object {
+        private const val SECTION_FOLLOWING = "__FOLLOWING__"
         private const val SECTION_HOME = "__HOME__"
         private const val SECTION_PARTNERS = "__PARTNERS__"
         private const val SECTION_SCHEDULE = "__SCHEDULE__"
