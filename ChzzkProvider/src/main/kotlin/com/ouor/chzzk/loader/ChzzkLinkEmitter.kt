@@ -1,6 +1,5 @@
 package com.ouor.chzzk.loader
 
-import android.util.Log
 import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -22,8 +21,6 @@ import com.ouor.chzzk.models.ShortformCardEnvelope
 import com.ouor.chzzk.qualityFromTracks
 import com.ouor.chzzk.settings.ChzzkSettings
 
-private const val LOG_TAG = "ChzzkProvider"
-
 /**
  * Provider-facing label used in the player source menu. Kept as a separate
  * constant so [ChzzkLinkEmitter] does not need a back-reference to the
@@ -41,15 +38,10 @@ internal const val PROVIDER_NAME = "Chzzk"
 internal suspend fun emitPlayLink(
     link: PlayLink,
     callback: (ExtractorLink) -> Unit,
-): Boolean {
-    Log.d(LOG_TAG, "emitPlayLink kind=${link.kind} id=${link.id} title='${link.title}' extra='${link.extra}'")
-    val result = when (link.kind) {
-        PlayLink.Kind.LIVE -> emitLiveLinks(link.id, link.title, callback)
-        PlayLink.Kind.VOD -> emitVodLinks(link.id.toLong(), link.title, callback)
-        PlayLink.Kind.CLIP -> emitClipLinks(link.id, link.title, link.extra, callback)
-    }
-    Log.d(LOG_TAG, "emitPlayLink kind=${link.kind} id=${link.id} → returned $result")
-    return result
+): Boolean = when (link.kind) {
+    PlayLink.Kind.LIVE -> emitLiveLinks(link.id, link.title, callback)
+    PlayLink.Kind.VOD -> emitVodLinks(link.id.toLong(), link.title, callback)
+    PlayLink.Kind.CLIP -> emitClipLinks(link.id, link.title, link.extra, callback)
 }
 
 private suspend fun emitClipLinks(
@@ -119,13 +111,6 @@ private suspend fun emitVodLinks(
     callback: (ExtractorLink) -> Unit,
 ): Boolean {
     val detail = fetchVideoDetail(videoNo)
-    Log.d(
-        LOG_TAG,
-        "emitVodLinks videoNo=$videoNo vodStatus=${detail.vodStatus} " +
-            "blindType=${detail.blindType} adult=${detail.adult} " +
-            "liveRewindPlaybackJson.set=${!detail.liveRewindPlaybackJson.isNullOrBlank()} " +
-            "videoId.set=${detail.videoId != null} inKey.set=${detail.inKey != null}"
-    )
     // Same playability guards as ChzzkLoader.loadVideo. The search→VOD path
     // hits those guards in load(); the channel→episode path bypasses load()
     // entirely (PlayLink decode goes straight to emit), so without these
@@ -311,11 +296,6 @@ private suspend fun emitMediaLinks(
     label: String,
     callback: (ExtractorLink) -> Unit,
 ): Boolean {
-    Log.d(
-        LOG_TAG,
-        "emitMediaLinks mediaList.size=${mediaList.size} entries=" +
-            mediaList.joinToString { "[mediaId=${it.mediaId} protocol=${it.protocol} path.blank=${it.path.isBlank()}]" }
-    )
     // For live we offer both standard HLS and low-latency LLHLS as separate
     // entries — users pick from the player menu. For VOD only standard HLS
     // exists in the playback payload, so the loop emits one entry.

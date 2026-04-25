@@ -32,7 +32,14 @@ data class PlayLink(
 
     companion object {
         fun decode(data: String): PlayLink? {
-            val parts = data.split("|", limit = 4)
+            // CloudStream's TvSeries flow resolves Episode.data against the
+            // provider's mainUrl, so a series-episode tap arrives here as
+            // `https://chzzk.naver.com/VOD|12345|title|`, while the
+            // Movie/LiveStream LoadResponse.dataUrl path arrives clean
+            // (`VOD|12345|title|`). Strip the prefix defensively so both
+            // paths decode the same way.
+            val payload = data.removePrefix("${Urls.WEB_BASE}/").removePrefix(Urls.WEB_BASE)
+            val parts = payload.split("|", limit = 4)
             if (parts.size < 2) return null
             val kind = runCatching { Kind.valueOf(parts[0]) }.getOrNull() ?: return null
             return PlayLink(
