@@ -629,12 +629,33 @@ class ChzzkProvider : MainAPI() {
         val playbackJson = detail.livePlaybackJson
             ?: throw ErrorLoadingException("livePlaybackJson 누락")
         val playback = parseJson<LivePlayback>(playbackJson)
-        return emitMediaLinks(
+        val label = title ?: detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live"
+        var emitted = emitMediaLinks(
             mediaList = playback.media,
-            label = title ?: detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live",
+            label = label,
             isLive = true,
             callback = callback,
         )
+        // Multiview cameras (when enabled by the streamer) appear as additional
+        // entries in the player's source menu so users can jump between angles.
+        playback.multiview.forEach { mv ->
+            val path = mv.path ?: return@forEach
+            val sourceLabel = "$name · 멀티뷰" + (mv.name?.let { " ($it)" } ?: "")
+            val isM3u8 = path.contains(".m3u8")
+            callback(
+                ExtractorLink(
+                    source = sourceLabel,
+                    name = "$sourceLabel · $label",
+                    url = path,
+                    referer = Urls.WEB_BASE,
+                    quality = 0,
+                    isM3u8 = isM3u8,
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                )
+            )
+            emitted = true
+        }
+        return emitted
     }
 
     private suspend fun emitVodLinks(
@@ -782,7 +803,8 @@ class ChzzkProvider : MainAPI() {
     private fun LiveSummary.toSearchResponse(): LiveSearchResponse {
         val verified = if (channel.verifiedMark) "✓ " else ""
         val viewers = if (concurrentUserCount > 0) " · ${formatViewers(concurrentUserCount)}" else ""
-        val title = "$verified${channel.channelName ?: channel.channelId}$viewers"
+        val watchParty = if (watchPartyNo != null) "👥 " else ""
+        val title = "$watchParty$verified${channel.channelName ?: channel.channelId}$viewers"
         return newLiveSearchResponse(
             name = if (liveTitle.isNullOrBlank()) title else "$title · $liveTitle",
             url = Urls.live(channel.channelId),
@@ -823,6 +845,15 @@ class ChzzkProvider : MainAPI() {
         if (!detail.openDate.isNullOrBlank()) {
             appendLine()
             append("방송 시작 ${detail.openDate}")
+        }
+        if (detail.timeMachineActive) {
+            appendLine()
+            append("⏪ 타임머신: 되감기 가능")
+        }
+        if (detail.watchPartyNo != null) {
+            appendLine()
+            append("👥 WatchParty #${detail.watchPartyNo}")
+            if (!detail.watchPartyTag.isNullOrBlank()) append(" · ${detail.watchPartyTag}")
         }
     }
 

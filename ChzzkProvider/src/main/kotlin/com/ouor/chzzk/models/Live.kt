@@ -18,6 +18,9 @@ data class LiveSummary(
     val liveCategoryValue: String? = null,
     val channel: ChannelInfo,
     val blindType: String? = null,
+    val watchPartyNo: Int? = null,
+    val watchPartyTag: String? = null,
+    val watchPartyType: String? = null,
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -43,6 +46,11 @@ data class LiveDetail(
     val livePollingStatusJson: String? = null,
     val channel: ChannelInfo,
     val blindType: String? = null,
+    val timeMachineActive: Boolean = false,
+    val timeMachinePlayback: Boolean = false,
+    val watchPartyNo: Int? = null,
+    val watchPartyTag: String? = null,
+    val watchPartyType: String? = null,
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -57,6 +65,15 @@ data class AutoPlayInfo(
 data class LivePlayback(
     val meta: PlaybackMeta? = null,
     val media: List<PlaybackMedia> = emptyList(),
+    val multiview: List<PlaybackMultiview> = emptyList(),
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class PlaybackMultiview(
+    val mediaId: String? = null,
+    val protocol: String? = null,
+    val path: String? = null,
+    val name: String? = null,
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
