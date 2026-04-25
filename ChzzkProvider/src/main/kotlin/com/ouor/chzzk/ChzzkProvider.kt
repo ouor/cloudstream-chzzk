@@ -527,6 +527,12 @@ class ChzzkProvider : MainAPI() {
         val owner = detail.optionalProperty?.ownerChannel
         val maker = detail.optionalProperty?.makerChannel
         val plotText = buildString {
+            // Honest disclaimer at the top: the play-info endpoint for clips
+            // has not been reverse-engineered yet, so the play button will
+            // surface an error. The metadata view (title, channel, etc.) is
+            // still useful so we keep load() working.
+            appendLine("⚠️ 클립 재생은 아직 미지원입니다 (정식 play-info 엔드포인트 미식별).")
+            appendLine()
             owner?.channelName?.let { append("채널: $it") }
             if (maker != null && maker.channelId != owner?.channelId && !maker.channelName.isNullOrBlank()) {
                 if (isNotEmpty()) appendLine()
@@ -631,11 +637,22 @@ class ChzzkProvider : MainAPI() {
         title: String?,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // Re-fetch the page to get a fresh playback URL — these tokens expire
-        // similarly to live HLS auth tokens.
-        val html = ChzzkApi.getText(Urls.clip(clipUID))
-        val clip = ClipScraper.parse(html) ?: return false
-        val streamUrl = clip.playbackUrl ?: return false
+        // The HAR capture confirmed that chzzk.naver.com is an SPA shell
+        // (~2.6 KB of HTML, no inline __NEXT_DATA__) — all data is loaded
+        // client-side via XHR. Scraping the page can therefore never yield
+        // an m3u8 URL. The official play-info endpoint for clips is still
+        // unidentified after three capture sets (one general, one clip-only,
+        // one live), so for now clip links are intentionally not emitted.
+        //
+        // ClipScraper is still attempted as a best-effort because the page
+        // *might* one day contain inline data again, but expect this branch
+        // to throw [ErrorLoadingException] on every real call.
+        val html = runCatching { ChzzkApi.getText(Urls.clip(clipUID)) }.getOrNull()
+        val clip = html?.let { ClipScraper.parse(it) }
+        val streamUrl = clip?.playbackUrl
+            ?: throw com.lagradost.cloudstream3.ErrorLoadingException(
+                "클립 재생 URL을 찾지 못했습니다. 정식 play-info 엔드포인트가 식별되면 지원 예정입니다 ($clipUID)."
+            )
         val sourceLabel = "$name (clip)"
         val variants = runCatching {
             M3u8Helper.generateM3u8(

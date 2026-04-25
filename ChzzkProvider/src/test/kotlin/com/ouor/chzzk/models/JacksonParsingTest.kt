@@ -82,6 +82,23 @@ class JacksonParsingTest {
         assertFalse(page.data.isEmpty())
     }
 
+    @Test fun `live-detail with NVELOP cdn variant parses identically`() {
+        // Live HLS host can flip between livecloud.pstatic.net (LCDN) and
+        // nvelop-livecloud.pstatic.net (NVELOP) depending on CDN routing.
+        // The schema is identical — this regression test pins both.
+        val json = loadFixture("live-detail-nvelop.json")
+        val res: ChzzkResponse<LiveDetail> = mapper.readValue(json)
+        assertEquals(200, res.code)
+        val detail = res.content!!
+        assertEquals("OPEN", detail.status)
+        val playback: LivePlayback = mapper.readValue(detail.livePlaybackJson!!)
+        val hls = playback.media.first { it.mediaId == "HLS" }
+        assertTrue(
+            "Expected NVELOP host on this fixture",
+            hls.path.contains("nvelop-livecloud.pstatic.net"),
+        )
+    }
+
     @Test fun `clip-detail parses with optionalProperty channels`() {
         val json = loadFixture("clip-detail.json")
         val res: ChzzkResponse<ClipDetail> = mapper.readValue(json)

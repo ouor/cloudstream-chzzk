@@ -502,13 +502,19 @@ videoChats: [{
 ```
 즉 단건 detail의 `content`와 동일한 객체를 `metaMap[clipUID]`에 매핑하여 반환.
 
-### 클립 재생 URL (미해결)
-캡처에 클립의 m3u8을 직접 반환하는 엔드포인트가 없습니다. 추정 후보:
-- `GET /service/v1/play-info/clip/{clipUID}` — 검증 안 됨
-- `GET /service/v1/clips/{clipUID}/play-info` — 검증 안 됨
-- 클립 페이지 (`https://chzzk.naver.com/clips/{clipUID}`) HTML의 `__NEXT_DATA__` 안에 inline 됨 — 부분 검증 됨
+### 클립 재생 URL (미해결 — 추가 캡처 필요)
 
-현재 구현(`ClipScraper.kt`)은 페이지를 GET하여 `__NEXT_DATA__` 블록의 m3u8 URL을 정규식으로 추출. 사이트 구조가 바뀌면 깨질 수 있어 추후 정식 엔드포인트가 식별되면 교체해야 합니다.
+**HAR 캡처 결과**:
+- `https://chzzk.naver.com/live/...` HTML 응답은 **2,659 바이트짜리 SPA shell** (Next.js가 아니며 inline JSON도 없음). 모든 데이터는 클라이언트 측에서 XHR로 fetch.
+- → **HTML 스크래핑으로 m3u8을 얻을 수 없습니다**. `ClipScraper.kt`의 `__NEXT_DATA__` 추출 전략은 사이트 아키텍처 상 절대 동작하지 않음. (현재 코드는 friendly error 표시용으로만 유지)
+
+**남은 추정 후보** (모두 미검증):
+- `GET /service/v1/play-info/clip/{clipUID}`
+- `GET /service/v1/clips/{clipUID}/play-info`
+- `GET /service/v1/play-info/{videoId}` ← 라이브의 `videoId` 형식과 동일하므로 video player가 통합 엔드포인트를 쓸 가능성
+- `comm-api.game.naver.com/nng_main/v1/clips/...` (chat이 이 호스트인 패턴)
+
+**다음 캡처 시 확인할 것**: 클립 페이지(`https://chzzk.naver.com/clips/{clipUID}`)를 브라우저로 열고 네트워크 탭에서 m3u8/play-info 요청을 캡처. 추가로 `apis.naver.com/livecloud/...` 호스트도 모니터링 (live의 p2p-config가 이 호스트에 있음).
 
 ---
 
@@ -611,6 +617,80 @@ v1과 동일 응답, v2 경로.
 
 ---
 
+## 팔로잉 / 인증 (Auth & Personal)
+*(2026-04-26 HAR 캡처에서 발견. 모두 NID_AUT/NID_SES 쿠키 필요)*
+
+### `GET /service/v1/channels/followings`
+사용자가 팔로우한 채널 전체 목록.
+
+### `GET /service/v1/channels/followings/live` ⭐
+**팔로우한 채널 중 현재 라이브 중인 것** — CloudStream `mainPage`의 "팔로잉 라이브" 섹션 후보.
+
+### `GET /service/v1/channels/{channelId}/follow`
+이 채널 팔로우 여부 / 팔로워 정보.
+
+### `GET /service/v1/badge-awards/unread`
+읽지 않은 배지 알림 수.
+
+### `GET /service/v1/personal/session-url`
+세션 부트스트랩 URL.
+
+### `GET /commercial/v1/cheat-key/promotion-status`
+구독(치즈) 프로모션 노출 여부.
+
+### `GET /commercial/v1/streamer-shop/{channelId}/notifiable`
+스트리머 상점 알림 가능 여부.
+
+### `GET /polling/v1/watch-event/live`
+시청 이벤트 폴링 (drops 등).
+
+### `GET /ad-polling/v1/lives/{liveId}/ad`
+라이브 광고 인서트 폴링.
+
+---
+
+## 채팅 (Chat WebSocket) — `comm-api.game.naver.com` & `nchat.naver.com`
+*(2026-04-26 HAR 캡처. CloudStream 채팅 오버레이 구현 시 필수)*
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/chats/access-token`
+**채팅 WebSocket 접속 토큰 발급.**
+
+**Query**
+| 이름 | 예시 | 설명 |
+|---|---|---|
+| `channelId` | `N2R_XI` | `chatChannelId` (라이브 detail 응답의 `chatChannelId` 필드, channelId와 다름) |
+| `chatType` | `STREAMING` | `STREAMING` 라이브 / `RECORD` VOD |
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/chats/{chatChannelId}/users/{userIdHash}/profile`
+**Query**: `streamingChannelId={channelId}&chatType=STREAMING`
+사용자별 채팅 프로필 (닉네임 컬러, 배지 등).
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/user/getUserStatus`
+현재 로그인 사용자 상태.
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/dm?limit=1`
+DM 카운트.
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/notification/new`
+새 알림 카운트.
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/userPushOption`
+푸시 알림 설정.
+
+### `GET https://comm-api.game.naver.com/nng_main/v1/privateUserBlocks/allUserIdHash`
+차단한 사용자 해시 목록.
+
+### WebSocket 엔드포인트
+- **`wss://kr-ss2.chat.naver.com/chat`** — 라이브 채팅 메인 소켓 (raw WebSocket frame, custom protocol)
+- **`wss://ssio25.nchat.naver.com/socket.io/?auth=...&EIO=3&transport=websocket`** — DM/알림 socket.io (Engine.IO v3)
+
+연결 절차:
+1. `GET /nng_main/v1/chats/access-token?channelId={chatChannelId}&chatType=STREAMING` → `accessToken`
+2. WebSocket으로 `wss://kr-ss2.chat.naver.com/chat` 접속
+3. 첫 frame에 `{"ver":"2", "cmd":100, "svcid":"game", "tid":1, "bdy":{"uid":<userIdHash>, "devType":2001, "accTkn":<accessToken>, "auth":"READ"}}` 류의 인증 메시지 전송 (정확한 포맷은 추가 캡처 필요)
+
+---
+
 ## 기타 (Misc)
 
 ### `GET /service/v1/client-config`
@@ -663,6 +743,15 @@ v1과 동일 응답, v2 경로.
 `live-detail` / `auto-play-info` / `videos/{n}` 응답 안의 `livePlaybackJson` 및 `liveRewindPlaybackJson`은 **문자열로 직렬화된 JSON**입니다. CloudStream에서는 `JSONObject(string)` 또는 `parseJson(string)` 으로 한 번 더 파싱해야 합니다.
 
 ### `livePlaybackJson` (라이브 송출)
+
+**확인된 CDN 호스트 (2026-04-26 HAR 캡처 기준)**:
+| `cdnType` | 호스트 | 비고 |
+|---|---|---|
+| `LCDN` | `livecloud.pstatic.net` | 초기 캡처 |
+| `NVELOP` | `nvelop-livecloud.pstatic.net` | HAR 캡처 — CDN 라우팅에 따라 동일 라이브가 호스트만 변경 |
+
+**`localhost:17080`은 공식 웹 클라이언트의 P2P 프록시.** `media[].path`에서 받은 직접 URL을 사용하면 P2P 없이 CDN에서 바로 받습니다 (CloudStream 플러그인은 항상 직접 URL 사용).
+
 ```jsonc
 {
   "meta": {
@@ -670,7 +759,7 @@ v1과 동일 응답, v2 경로.
     "streamSeq": 26441751,
     "liveId": "18553740",
     "paidLive": false,
-    "cdnInfo": { "cdnType": "LCDN" },
+    "cdnInfo": { "cdnType": "LCDN" },        // or "NVELOP"
     "p2p": true,
     "cmcdEnabled": false,
     "playbackAuthType": "NONE"
@@ -688,15 +777,15 @@ v1과 동일 응답, v2 경로.
   }],
   "media": [
     {
-      "mediaId": "HLS",       // 일반 HLS
+      "mediaId": "HLS",       // 일반 HLS — master 파일명 패턴: <id>_hls_playlist.m3u8
       "protocol": "HLS",
-      "path": "https://livecloud.pstatic.net/.../ry3...hls_playlist.m3u8?hdnts=...",
+      "path": "https://nvelop-livecloud.pstatic.net/chzzk/lip2_kr/<streamSeq>/<id1>/<id2>_hls_playlist.m3u8?hdnts=st=...~exp=...~acl=*/<id1>/*~hmac=...",
       "encodingTrack": [ EncodingTrack, ... ]
     },
     {
-      "mediaId": "LLHLS",     // 저지연 HLS
+      "mediaId": "LLHLS",     // 저지연 HLS — master 파일명 패턴: <id>_playlist.m3u8 (no _hls_ infix)
       "protocol": "HLS",
-      "path": "https://livecloud.pstatic.net/.../ry3...playlist.m3u8?hdnts=...",
+      "path": "https://nvelop-livecloud.pstatic.net/chzzk/lip2_kr/<streamSeq>/<id1>/<id2>_playlist.m3u8?hdnts=...",
       "encodingTrack": [ ... ]
     }
   ],
@@ -768,6 +857,18 @@ v1과 동일 응답, v2 경로.
 2. 화질 직접 선택 시 `master m3u8`을 가져와 variants에서 해상도 매칭 (Cloudstream의 `M3u8Helper`로 처리 가능).
 3. `path`의 쿼리 `hdnts=st=...~exp=...` 토큰은 시간 만료가 짧음 (수 시간). 매번 신선한 응답을 받아 사용해야 함.
 4. P2P가 필요 없다면 `path` 그대로 HLS 플레이어에 전달. P2P 활성화 시 `encodingTrack[].p2pPath`/`p2pPathUrlEncoding` 와 `api[].path`(p2p-config) 사용.
+
+### LLHLS 동작 (HAR 캡처 검증)
+- LLHLS variant playlist는 `EXT-X-PART` 디렉티브로 부분 청크를 노출
+- 클라이언트는 `_HLS_msn=N&_HLS_part=K` 쿼리로 blocking playlist 요청 가능 (다음 청크가 준비될 때까지 서버가 응답 보류)
+- 세그먼트 컨테이너는 **CMAF/fMP4** (`.m4v` 비디오, `.m4s` 오디오) — `.ts`가 아님
+- 첫 init 세그먼트: `<quality>_0_0_0.m4s`
+- 미디어 세그먼트: `<quality>_<seq>_<ts>_<id>_<id>_<msn>_<part>.m4v`
+
+ExoPlayer/CloudStream 플레이어가 LLHLS의 `EXT-X-PART`를 지원하지 않으면 `mediaId == "HLS"` (standard, non-LL)만 사용. 둘 다 emit해두면 사용자가 선택 가능.
+
+### `localhost:17080` (P2P 프록시)
+공식 웹 클라이언트는 `livecloud-p2p` 모듈을 띄워 `localhost:17080`에서 m3u8을 가로채 P2P+CDN 하이브리드로 재생. CloudStream 플러그인은 이 모듈이 없으므로 항상 직접 CDN URL (`media[].path`) 사용 — 추가 작업 불필요.
 
 ---
 
