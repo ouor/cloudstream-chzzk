@@ -248,7 +248,59 @@ class ChzzkProvider : MainAPI() {
 
     // ----------------------------------------------------------------- search
 
-    override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
+    /**
+     * Lightweight autocomplete for the search bar. The full [search]
+     * fan-outs to three endpoints (channels + lives + videos), which is
+     * overkill for keystroke-by-keystroke responsiveness. Here we hit
+     * /search/channels/auto-complete which returns just a `data: string[]`
+     * of channel names matching the prefix, then upgrade each to a single
+     * channel-search call to fetch the channelId/avatar. This keeps the
+     * dropdown snappy while still landing on a usable card.
+     */
+    override suspend fun quickSearch(query: String): List<SearchResponse> {
+        if (query.isBlank() || query.startsWith("#")) return search(query)
+        val rawNames = runCatching {
+            ChzzkApi.get(Endpoints.searchAutoComplete(query, size = 10)).text
+        }.getOrNull() ?: return search(query)
+        val names = tryParseJson<ChzzkResponse<PageData<String>>>(rawNames)
+            ?.content?.data
+            .orEmpty()
+            .filter { it.isNotBlank() }
+            .take(8)
+        if (names.isEmpty()) return search(query)
+
+        // Resolve each name to a real channel (parallel via async would be
+        // ideal — keep it sequential to avoid blowing past Chzzk rate limits
+        // and to keep failures isolated).
+        val results = mutableListOf<SearchResponse>()
+        val seen = mutableSetOf<String>()
+        for (name in names) {
+            val raw = runCatching { ChzzkApi.get(Endpoints.searchChannels(name, size = 1)).text }.getOrNull()
+                ?: continue
+            val res = tryParseJson<ChzzkResponse<PageData<SearchChannelItem>>>(raw)
+            val item = res?.content?.data?.firstOrNull() ?: continue
+            if (!seen.add(item.channel.channelId)) continue
+            val live = item.content?.live?.takeIf { it.status == "OPEN" }
+            results += if (live != null) {
+                newLiveSearchResponse(
+                    name = "${item.channel.channelName ?: item.channel.channelId} · ${live.liveTitle ?: ""}".trim(),
+                    url = Urls.live(item.channel.channelId),
+                    type = TvType.Live,
+                ) {
+                    posterUrl = live.liveImageUrl?.let { fillThumb(it) } ?: item.channel.channelImageUrl
+                }
+            } else {
+                newLiveSearchResponse(
+                    name = item.channel.channelName ?: item.channel.channelId,
+                    url = Urls.channel(item.channel.channelId),
+                    type = TvType.Live,
+                ) {
+                    posterUrl = item.channel.channelImageUrl
+                }
+            }
+        }
+        return results
+    }
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
@@ -257,7 +309,11 @@ class ChzzkProvider : MainAPI() {
         // base API has no dedicated tag endpoint, so we fan out the same query
         // (sans `#`) and post-filter results whose tags[] contains the term.
         val isTagSearch = query.startsWith("#")
-        val effectiveQuery = if (isTagSearch) query.removePrefix("#").trim() else query
+        // Type filter prefixes: `live:foo`, `vod:foo`, `clip:foo` restrict the
+        // fan-out to a single endpoint, halving load time when the user knows
+        // what they want.
+        val (typeFilter, queryAfterType) = parseSearchTypeFilter(query)
+        val effectiveQuery = (if (isTagSearch) queryAfterType.removePrefix("#") else queryAfterType).trim()
         if (effectiveQuery.isBlank()) return emptyList()
         val tagFilter: ((List<String>?) -> Boolean) = if (isTagSearch) {
             { tags -> tags?.any { it.equals(effectiveQuery, ignoreCase = true) } == true }
@@ -269,60 +325,91 @@ class ChzzkProvider : MainAPI() {
         val seenChannels = mutableSetOf<String>()
         val seenVideos = mutableSetOf<Long>()
 
-        runCatching {
-            val raw = ChzzkApi.get(Endpoints.searchChannels(effectiveQuery)).text
-            val res = tryParseJson<ChzzkResponse<PageData<SearchChannelItem>>>(raw)
-            res?.content?.data.orEmpty().forEach { item ->
-                if (!seenChannels.add(item.channel.channelId)) return@forEach
-                val live = item.content?.live
-                if (live != null && live.status == "OPEN" && tagFilter(live.tags)) {
-                    results += newLiveSearchResponse(
-                        name = "${item.channel.channelName ?: item.channel.channelId} · ${live.liveTitle ?: ""}".trim(),
-                        url = Urls.live(item.channel.channelId),
-                        type = TvType.Live,
-                    ) {
-                        posterUrl = live.liveImageUrl?.let { fillThumb(it) } ?: item.channel.channelImageUrl
+        if (typeFilter == null || typeFilter == SearchType.CHANNEL || typeFilter == SearchType.LIVE) {
+            runCatching {
+                val raw = ChzzkApi.get(Endpoints.searchChannels(effectiveQuery)).text
+                val res = tryParseJson<ChzzkResponse<PageData<SearchChannelItem>>>(raw)
+                res?.content?.data.orEmpty().forEach { item ->
+                    if (!seenChannels.add(item.channel.channelId)) return@forEach
+                    val live = item.content?.live
+                    if (live != null && live.status == "OPEN" && tagFilter(live.tags)) {
+                        results += newLiveSearchResponse(
+                            name = "${item.channel.channelName ?: item.channel.channelId} · ${live.liveTitle ?: ""}".trim(),
+                            url = Urls.live(item.channel.channelId),
+                            type = TvType.Live,
+                        ) {
+                            posterUrl = live.liveImageUrl?.let { fillThumb(it) } ?: item.channel.channelImageUrl
+                        }
+                    } else if (!isTagSearch && typeFilter != SearchType.LIVE) {
+                        results += newLiveSearchResponse(
+                            name = item.channel.channelName ?: item.channel.channelId,
+                            url = Urls.channel(item.channel.channelId),
+                            type = TvType.Live,
+                        ) {
+                            posterUrl = item.channel.channelImageUrl
+                        }
                     }
-                } else if (!isTagSearch) {
-                    results += newLiveSearchResponse(
-                        name = item.channel.channelName ?: item.channel.channelId,
-                        url = Urls.channel(item.channel.channelId),
-                        type = TvType.Live,
-                    ) {
-                        posterUrl = item.channel.channelImageUrl
+                    if (typeFilter != SearchType.LIVE) {
+                        item.content?.videos.orEmpty().take(3).forEach { video ->
+                            if (!tagFilter(video.tags)) return@forEach
+                            if (seenVideos.add(video.videoNo)) {
+                                results += video.toMovieSearchResponse(item.channel.channelName)
+                            }
+                        }
                     }
                 }
-                item.content?.videos.orEmpty().take(3).forEach { video ->
+            }
+        }
+
+        if (typeFilter == null || typeFilter == SearchType.LIVE) {
+            runCatching {
+                val raw = ChzzkApi.get(Endpoints.searchLives(effectiveQuery)).text
+                val res = tryParseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
+                res?.content?.data.orEmpty().forEach { live ->
+                    if (!tagFilter(live.tags)) return@forEach
+                    if (seenChannels.add(live.channel.channelId)) results += live.toSearchResponse()
+                }
+            }
+        }
+
+        if (typeFilter == null || typeFilter == SearchType.VOD) {
+            runCatching {
+                val raw = ChzzkApi.get(Endpoints.searchVideos(effectiveQuery)).text
+                val res = tryParseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
+                res?.content?.data.orEmpty().forEach { video ->
                     if (!tagFilter(video.tags)) return@forEach
                     if (seenVideos.add(video.videoNo)) {
-                        results += video.toMovieSearchResponse(item.channel.channelName)
+                        results += video.toMovieSearchResponse(video.channel?.channelName)
                     }
-                }
-            }
-        }
-
-        runCatching {
-            val raw = ChzzkApi.get(Endpoints.searchLives(effectiveQuery)).text
-            val res = tryParseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
-            res?.content?.data.orEmpty().forEach { live ->
-                if (!tagFilter(live.tags)) return@forEach
-                if (seenChannels.add(live.channel.channelId)) results += live.toSearchResponse()
-            }
-        }
-
-        runCatching {
-            val raw = ChzzkApi.get(Endpoints.searchVideos(effectiveQuery)).text
-            val res = tryParseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
-            res?.content?.data.orEmpty().forEach { video ->
-                if (!tagFilter(video.tags)) return@forEach
-                if (seenVideos.add(video.videoNo)) {
-                    results += video.toMovieSearchResponse(video.channel?.channelName)
                 }
             }
         }
 
         return results
     }
+
+    private enum class SearchType { LIVE, VOD, CHANNEL }
+
+    /**
+     * Strip a leading `live:` / `vod:` / `clip:` / `channel:` prefix and
+     * return the remaining query plus its inferred type filter.
+     */
+    private fun parseSearchTypeFilter(raw: String): Pair<SearchType?, String> {
+        val lowered = raw.trim()
+        for (prefix in TYPE_PREFIXES) {
+            if (lowered.startsWith(prefix.first, ignoreCase = true)) {
+                return prefix.second to lowered.removePrefix(prefix.first).removePrefix(" ")
+            }
+        }
+        return null to raw
+    }
+
+    private val TYPE_PREFIXES = listOf(
+        "live:" to SearchType.LIVE,
+        "vod:" to SearchType.VOD,
+        "video:" to SearchType.VOD,
+        "channel:" to SearchType.CHANNEL,
+    )
 
     // ------------------------------------------------------------------- load
 
