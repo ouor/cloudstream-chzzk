@@ -430,7 +430,12 @@ class ChzzkProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val link = PlayLink.decode(data) ?: return false
+        android.util.Log.d("ChzzkProvider", "loadLinks data='$data'")
+        val link = PlayLink.decode(data)
+        if (link == null) {
+            android.util.Log.w("ChzzkProvider", "loadLinks PlayLink.decode returned null for data='$data'")
+            return false
+        }
         return emitPlayLink(link, callback)
     }
 
