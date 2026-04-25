@@ -1,0 +1,23 @@
+[
+    {
+        "iconUrl": "https://ssl.pstatic.net/static/nng/glive/icon/chzzk.png",
+        "fileHash": "sha256-dd81b8a2bde6ebd99974bd6699ec10fcfafe540f28734d3dfb35d1f3fada2070",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/ouor/cloudstream-chzzk",
+        "fileSize": 136764,
+        "status": 3,
+        "language": "ko",
+        "authors": [
+            "ouor"
+        ],
+        "tvTypes": [
+            "Live",
+            "Movie"
+        ],
+        "version": 2,
+        "internalName": "ChzzkProvider",
+        "description": "\ub124\uc774\ubc84 \uce58\uc9c0\uc9c1 \ub77c\uc774\ube0c / \ub2e4\uc2dc\ubcf4\uae30 / \ud074\ub9bd",
+        "url": "https://raw.githubusercontent.com/ouor/cloudstream-chzzk/builds/ChzzkProvider.cs3",
+        "name": "ChzzkProvider"
+    }
+]
