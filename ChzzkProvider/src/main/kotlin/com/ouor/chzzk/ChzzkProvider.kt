@@ -1,61 +1,41 @@
 package com.ouor.chzzk
 
-import com.lagradost.cloudstream3.Episode
-import com.lagradost.cloudstream3.ErrorLoadingException
 import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LiveSearchResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.MovieSearchResponse
 import com.lagradost.cloudstream3.SearchResponse
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newLiveSearchResponse
-import com.lagradost.cloudstream3.newLiveStreamLoadResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.ouor.chzzk.api.ChzzkApi
 import com.ouor.chzzk.api.Endpoints
 import com.ouor.chzzk.auth.ChzzkAuth
-import com.ouor.chzzk.settings.ChzzkSettings
-import com.ouor.chzzk.models.CafeConnection
-import com.ouor.chzzk.models.ChatRules
-import com.ouor.chzzk.models.ClipDetail
-import com.ouor.chzzk.models.RmcnmvPlayInfo
-import com.ouor.chzzk.models.ShortformCardEnvelope
-import com.ouor.chzzk.models.DonationRankResponse
-import com.ouor.chzzk.models.DonationRanker
-import com.ouor.chzzk.models.LogPowerWeekly
-import com.ouor.chzzk.models.StreamerShopProducts
-import com.ouor.chzzk.models.ChannelInfo
+import com.ouor.chzzk.loader.PROVIDER_NAME
+import com.ouor.chzzk.loader.emitPlayLink
+import com.ouor.chzzk.loader.loadChannel
+import com.ouor.chzzk.loader.loadClip
+import com.ouor.chzzk.loader.loadLive
+import com.ouor.chzzk.loader.loadVideo
 import com.ouor.chzzk.models.ChzzkResponse
 import com.ouor.chzzk.models.HomeMain
-import com.ouor.chzzk.models.LiveDetail
-import com.ouor.chzzk.models.LivePlayback
-import com.ouor.chzzk.models.LiveRecommendedResponse
 import com.ouor.chzzk.models.LiveSummary
 import com.ouor.chzzk.models.PageData
-import com.ouor.chzzk.models.ProgramSchedule
 import com.ouor.chzzk.models.ProgramScheduleList
 import com.ouor.chzzk.models.SearchChannelItem
 import com.ouor.chzzk.models.StreamerPartnerList
-import com.ouor.chzzk.models.VideoDetail
 import com.ouor.chzzk.models.VideoSummary
 
 class ChzzkProvider : MainAPI() {
     override var mainUrl = Urls.WEB_BASE
-    override var name = "Chzzk"
+    override var name = PROVIDER_NAME
     override val supportedTypes = setOf(TvType.Live, TvType.Movie)
 
     override var lang = "ko"
@@ -134,10 +114,10 @@ class ChzzkProvider : MainAPI() {
         return buildList {
             home.topLives.asSequence()
                 .filterNot { hideAdult && it.adult }
-                .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
+                .forEach { if (seen.add(it.liveId)) add(toSearchResponse(it)) }
             home.slots.asSequence().flatMap { it.slotContents.asSequence() }
                 .filterNot { hideAdult && it.adult }
-                .forEach { if (seen.add(it.liveId)) add(it.toSearchResponse()) }
+                .forEach { if (seen.add(it.liveId)) add(toSearchResponse(it)) }
         }
     }
 
@@ -154,29 +134,14 @@ class ChzzkProvider : MainAPI() {
             .getOrNull() ?: return emptyList()
         val res = runCatching { parseJson<ChzzkResponse<PageData<LiveSummary>>>(raw) }.getOrNull()
         if (res?.code != 200) return emptyList()
-        return res.content?.data.orEmpty().map { it.toSearchResponse() }
+        return res.content?.data.orEmpty().map { toSearchResponse(it) }
     }
 
     private suspend fun loadSchedule(): List<SearchResponse> {
         val raw = ChzzkApi.getText(Endpoints.programSchedulesComing())
         val res = parseJson<ChzzkResponse<ProgramScheduleList>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "program-schedules")
-        return res.content?.programSchedules.orEmpty().map { it.toSearchResponse() }
-    }
-
-    private fun ProgramSchedule.toSearchResponse(): LiveSearchResponse {
-        val ch = channel
-        val title = listOfNotNull(scheduleDate, scheduleTitle).joinToString(" · ")
-        val name = listOfNotNull(ch?.channelName, title).joinToString(" — ")
-            .ifBlank { scheduleTitle ?: "방송 예정" }
-        val targetUrl = if (ch != null) Urls.channel(ch.channelId) else Urls.WEB_BASE
-        return newLiveSearchResponse(
-            name = name,
-            url = targetUrl,
-            type = TvType.Live,
-        ) {
-            posterUrl = ch?.channelImageUrl
-        }
+        return res.content?.programSchedules.orEmpty().map { toSearchResponse(it) }
     }
 
     private suspend fun loadPartners(): List<SearchResponse> {
@@ -241,7 +206,7 @@ class ChzzkProvider : MainAPI() {
             cache[page] = encodeCategoryCursor(next.first, next.second)
         }
         // adult filtering already applied in fetchCategory based on auth state
-        val items = batch.lives.map { it.toSearchResponse() }
+        val items = batch.lives.map { toSearchResponse(it) }
         return items to (next != null)
     }
 
@@ -391,7 +356,7 @@ class ChzzkProvider : MainAPI() {
                         item.content?.videos.orEmpty().take(3).forEach { video ->
                             if (!tagFilter(video.tags)) return@forEach
                             if (seenVideos.add(video.videoNo)) {
-                                results += video.toMovieSearchResponse(item.channel.channelName)
+                                results += toMovieSearchResponse(video, item.channel.channelName)
                             }
                         }
                     }
@@ -405,7 +370,7 @@ class ChzzkProvider : MainAPI() {
                 val res = tryParseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
                 res?.content?.data.orEmpty().forEach { live ->
                     if (!tagFilter(live.tags)) return@forEach
-                    if (seenChannels.add(live.channel.channelId)) results += live.toSearchResponse()
+                    if (seenChannels.add(live.channel.channelId)) results += toSearchResponse(live)
                 }
             }
         }
@@ -417,7 +382,7 @@ class ChzzkProvider : MainAPI() {
                 res?.content?.data.orEmpty().forEach { video ->
                     if (!tagFilter(video.tags)) return@forEach
                     if (seenVideos.add(video.videoNo)) {
-                        results += video.toMovieSearchResponse(video.channel?.channelName)
+                        results += toMovieSearchResponse(video, video.channel?.channelName)
                     }
                 }
             }
@@ -449,7 +414,7 @@ class ChzzkProvider : MainAPI() {
         "channel:" to SearchType.CHANNEL,
     )
 
-    // ------------------------------------------------------------------- load
+    // ----------------------------------------------------------- load/loadLinks
 
     override suspend fun load(url: String): LoadResponse? = when {
         Urls.parseLive(url) != null -> loadLive(url, Urls.parseLive(url)!!)
@@ -459,731 +424,14 @@ class ChzzkProvider : MainAPI() {
         else -> null
     }
 
-    private suspend fun loadLive(url: String, channelId: String): LoadResponse {
-        val detail = fetchLiveDetail(channelId)
-        if (detail.status != "OPEN") {
-            throw ErrorLoadingException("이 채널은 현재 방송 중이 아닙니다.")
-        }
-        if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
-            throw ErrorLoadingException("성인 방송입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
-        }
-        if (detail.blindType != null) {
-            throw ErrorLoadingException("이 방송은 시청이 제한되었습니다 (${detail.blindType}).")
-        }
-        val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
-        val basePlot = buildPlot(detail)
-        val plotText = augmentPlotWithCommunity(
-            base = if (detail.krOnlyViewing) "$basePlot\n\n🇰🇷 한국 지역에서만 시청 가능 (해외 IP 차단)" else basePlot,
-            channelId = channelId,
-        )
-        return newLiveStreamLoadResponse(
-            name = detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live",
-            url = url,
-            dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.LIVE, channelId, detail.liveTitle)),
-        ) {
-            posterUrl = detail.liveImageUrl?.let { fillThumb(it) } ?: detail.channel.channelImageUrl
-            plot = plotText
-            tags = buildTags(detail.liveCategoryValue, detail.tags)
-            recommendations = recs
-        }
-    }
-
-    private suspend fun loadVideo(url: String, videoNo: Long): LoadResponse {
-        val detail = fetchVideoDetail(videoNo)
-        // vodStatus values seen in captures:
-        //   - "NONE"     — playable (used by /service/v3/videos/{n} for live-rewind VODs)
-        //   - "ABR_HLS"  — playable (multi-bitrate HLS, used by clips and many VODs)
-        // Anything else (e.g. "EXPIRED", "PROCESSING") means we cannot play.
-        // Earlier this guard rejected "ABR_HLS" by mistake and produced a
-        // user-visible "링크를 찾을 수 없음" toast.
-        val playableStatuses = setOf("NONE", "ABR_HLS")
-        if (detail.vodStatus != null && detail.vodStatus !in playableStatuses) {
-            throw ErrorLoadingException("이 다시보기는 더 이상 시청할 수 없습니다 (${detail.vodStatus}).")
-        }
-        if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
-            throw ErrorLoadingException("성인 영상입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
-        }
-        if (detail.blindType != null) {
-            throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")
-        }
-        // Surface prev/next VOD navigation + same-channel recommendations.
-        val nav = listOfNotNull(
-            detail.prevVideo?.toMovieSearchResponse(detail.channel?.channelName, prefix = "← 이전: "),
-            detail.nextVideo?.toMovieSearchResponse(detail.channel?.channelName, prefix = "→ 다음: "),
-        )
-        val channelRecs = detail.channel?.channelId?.let { id ->
-            runCatching { fetchLiveRecommendations(id) }.getOrDefault(emptyList())
-        }.orEmpty()
-        return newMovieLoadResponse(
-            name = detail.videoTitle ?: "video #$videoNo",
-            url = url,
-            type = TvType.Movie,
-            dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.VOD, videoNo.toString(), detail.videoTitle)),
-        ) {
-            posterUrl = detail.thumbnailImageUrl
-            plot = buildVideoPlot(detail)
-            tags = buildTags(detail.videoCategoryValue, detail.tags)
-            year = detail.publishDate?.take(4)?.toIntOrNull()
-            duration = (detail.duration / 60L).toInt().takeIf { it > 0 }
-            recommendations = nav + channelRecs
-            // Chzzk pre-roll trailer is stitched into the VOD itself, so we
-            // do not surface it as a separate LoadResponse.addTrailer entry —
-            // the cloudstream stub does not expose a stable addTrailer API
-            // for arbitrary mp4 URLs anyway.
-        }
-    }
-
-    private suspend fun loadClip(url: String, clipUID: String): LoadResponse {
-        // Metadata comes from the official endpoint
-        // GET /service/v1/clips/{clipUID}/detail (verified against the
-        // April 2026 capture set). Playback URL is still resolved by
-        // scraping the clip page in emitClipLinks since clipDetail only
-        // carries `videoId` + `vodStatus`, not the actual m3u8 URL.
-        val raw = ChzzkApi.getText(Endpoints.clipDetail(clipUID))
-        val res = parseJson<ChzzkResponse<ClipDetail>>(raw)
-        ChzzkApi.checkOk(res.code, res.message, "clip $clipUID")
-        val detail = res.content
-            ?: throw ErrorLoadingException("클립 정보를 불러오지 못했습니다 ($clipUID).")
-
-        if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
-            throw ErrorLoadingException("성인 클립입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
-        }
-        if (detail.blindType != null) {
-            throw ErrorLoadingException("이 클립은 시청이 제한되었습니다 (${detail.blindType}).")
-        }
-        if (detail.vodStatus != null && detail.vodStatus != "ABR_HLS" && detail.vodStatus != "NONE") {
-            throw ErrorLoadingException("재생할 수 없는 클립입니다 (vodStatus=${detail.vodStatus}).")
-        }
-
-        val owner = detail.optionalProperty?.ownerChannel
-        val maker = detail.optionalProperty?.makerChannel
-        val plotText = buildString {
-            owner?.channelName?.let { append("채널: $it") }
-            if (maker != null && maker.channelId != owner?.channelId && !maker.channelName.isNullOrBlank()) {
-                if (isNotEmpty()) appendLine()
-                append("클립 작성자: ${maker.channelName}")
-            }
-            if (!detail.clipCategory.isNullOrBlank()) {
-                if (isNotEmpty()) appendLine()
-                append("카테고리: ${detail.clipCategory}")
-            }
-            if (!detail.createdDate.isNullOrBlank()) {
-                if (isNotEmpty()) appendLine()
-                append("게시 ${detail.createdDate}")
-            }
-            if (detail.krOnlyViewing) {
-                if (isNotEmpty()) appendLine()
-                append("🇰🇷 한국 지역에서만 시청 가능 (해외 IP 차단)")
-            }
-        }
-        // Carry videoId via PlayLink.extra so emitClipLinks can hit the
-        // api-videohub play-info endpoint without re-fetching clipDetail.
-        val videoId = detail.videoId
-            ?: throw ErrorLoadingException("클립 videoId가 누락되었습니다 ($clipUID).")
-        return newMovieLoadResponse(
-            name = detail.clipTitle ?: "Chzzk Clip",
-            url = url,
-            type = TvType.Movie,
-            dataUrl = encodePlayLink(
-                PlayLink(PlayLink.Kind.CLIP, clipUID, detail.clipTitle, extra = videoId),
-            ),
-        ) {
-            posterUrl = detail.thumbnailImageUrl ?: owner?.channelImageUrl
-            plot = plotText.takeIf { it.isNotBlank() }
-            tags = listOfNotNull(detail.clipCategory).filter { it.isNotBlank() }
-            year = detail.createdDate?.take(4)?.toIntOrNull()
-            duration = (detail.duration / 60L).toInt().takeIf { it > 0 }
-        }
-    }
-
-    private suspend fun loadChannel(url: String, channelId: String): LoadResponse {
-        val rawChannel = ChzzkApi.getText(Endpoints.channel(channelId))
-        val channelRes = parseJson<ChzzkResponse<ChannelInfo>>(rawChannel)
-        ChzzkApi.checkOk(channelRes.code, channelRes.message, "channel $channelId")
-        val info = channelRes.content ?: throw ErrorLoadingException("채널 정보를 불러오지 못했습니다.")
-
-        val live = runCatching { fetchLiveDetail(channelId) }.getOrNull()?.takeIf { it.status == "OPEN" }
-        val videos = runCatching { fetchAllChannelVideos(channelId) }.getOrDefault(emptyList())
-
-        val episodes = mutableListOf<Episode>()
-        if (live != null) {
-            episodes += newEpisode(
-                data = encodePlayLink(PlayLink(PlayLink.Kind.LIVE, channelId, live.liveTitle)),
-            ) {
-                name = "🔴 LIVE · ${live.liveTitle ?: "방송 중"}"
-                posterUrl = live.liveImageUrl?.let { fillThumb(it) }
-                description = "현재 ${live.concurrentUserCount}명 시청 중"
-                episode = 0
-            }
-        }
-        videos.forEachIndexed { index, video ->
-            episodes += newEpisode(
-                data = encodePlayLink(PlayLink(PlayLink.Kind.VOD, video.videoNo.toString(), video.videoTitle)),
-            ) {
-                name = video.videoTitle
-                posterUrl = video.thumbnailImageUrl
-                description = video.publishDate
-                episode = index + 1
-            }
-        }
-
-        val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
-        val plotText = augmentPlotWithCommunity(info.channelDescription.orEmpty(), channelId)
-        return newTvSeriesLoadResponse(
-            name = info.channelName ?: channelId,
-            url = url,
-            type = TvType.TvSeries,
-            episodes = episodes,
-        ) {
-            posterUrl = info.channelImageUrl
-            plot = plotText
-            tags = buildTags(live?.liveCategoryValue, live?.tags)
-            recommendations = recs
-        }
-    }
-
-    // -------------------------------------------------------------- loadLinks
-    //
-    // Chzzk's `playerAdFlag` (preRoll/midRoll) governs ad insertion in the
-    // official web player. We deliberately ignore it here — we pull the HLS
-    // master directly, which the CDN serves without ad-stitching, so users
-    // get an ad-free stream as a side effect of using the raw playback URL.
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        val link = decodePlayLink(data) ?: return false
-        return when (link.kind) {
-            PlayLink.Kind.LIVE -> emitLiveLinks(link.id, link.title, callback)
-            PlayLink.Kind.VOD -> emitVodLinks(link.id.toLong(), link.title, callback)
-            PlayLink.Kind.CLIP -> emitClipLinks(link.id, link.title, link.extra, callback)
-        }
-    }
-
-    private suspend fun emitClipLinks(
-        clipUID: String,
-        title: String?,
-        videoId: String?,
-        callback: (ExtractorLink) -> Unit,
-    ): Boolean {
-        // Resolve videoId: usually carried via PlayLink.extra (set by loadClip),
-        // but fall back to a fresh clipDetail fetch if dataUrl came from an
-        // older cached entry that pre-dates the extra field.
-        val resolvedVideoId = videoId ?: run {
-            val raw = ChzzkApi.getText(Endpoints.clipDetail(clipUID))
-            parseJson<ChzzkResponse<ClipDetail>>(raw).content?.videoId
-        } ?: throw ErrorLoadingException("클립 videoId 조회 실패 ($clipUID).")
-
-        return emitFromVideohub(
-            playInfoUrl = Endpoints.clipPlayInfo(
-                videoId = resolvedVideoId, clipUID = clipUID, recId = null,
-            ),
-            label = title ?: clipUID,
-            sourceLabel = "$name (clip)",
-            errorTag = "clip $clipUID",
-            callback = callback,
-        )
-    }
-
-    private suspend fun emitLiveLinks(
-        channelId: String,
-        title: String?,
-        callback: (ExtractorLink) -> Unit,
-    ): Boolean {
-        val detail = fetchLiveDetail(channelId)
-        val playbackJson = detail.livePlaybackJson
-            ?: throw ErrorLoadingException("livePlaybackJson 누락")
-        val playback = parseJson<LivePlayback>(playbackJson)
-        val label = title ?: detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live"
-        var emitted = emitMediaLinks(
-            mediaList = playback.media,
-            label = label,
-            isLive = true,
-            callback = callback,
-        )
-        // Multiview cameras (when enabled by the streamer) appear as additional
-        // entries in the player's source menu so users can jump between angles.
-        playback.multiview.forEach { mv ->
-            val path = mv.path ?: return@forEach
-            val sourceLabel = "$name · 멀티뷰" + (mv.name?.let { " ($it)" } ?: "")
-            val isM3u8 = path.contains(".m3u8")
-            callback(
-                ExtractorLink(
-                    source = sourceLabel,
-                    name = "$sourceLabel · $label",
-                    url = path,
-                    referer = Urls.WEB_BASE,
-                    quality = 0,
-                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                )
-            )
-            emitted = true
-        }
-        return emitted
-    }
-
-    private suspend fun emitVodLinks(
-        videoNo: Long,
-        title: String?,
-        callback: (ExtractorLink) -> Unit,
-    ): Boolean {
-        val detail = fetchVideoDetail(videoNo)
-        val label = title ?: detail.videoTitle ?: "video #$videoNo"
-
-        // Path 1: live-rewind VODs ship `liveRewindPlaybackJson` inline (same
-        // shape as livePlaybackJson). Use it when present.
-        val playbackJson = detail.liveRewindPlaybackJson
-        if (!playbackJson.isNullOrBlank()) {
-            val playback = parseJson<LivePlayback>(playbackJson)
-            return emitMediaLinks(
-                mediaList = playback.media,
-                label = label,
-                isLive = false,
-                callback = callback,
-            )
-        }
-
-        // Path 2: ABR_HLS VODs do NOT embed liveRewindPlaybackJson. The
-        // official web player calls Naver's RMC video player API (apis.naver.com
-        // /rmcnmv/...) using the `inKey` token from videoDetail. The
-        // /shortformhub endpoint that clips use returns errorCode=GET_FAILED
-        // for these — verified against video #12893353 on 2026-04-26.
-        val videoId = detail.videoId
-            ?: throw ErrorLoadingException(
-                "재생 URL을 찾지 못했습니다 (videoId 누락, vodStatus=${detail.vodStatus})."
-            )
-        val inKey = detail.inKey
-            ?: throw ErrorLoadingException(
-                "재생 URL을 찾지 못했습니다 (inKey 누락, vodStatus=${detail.vodStatus})."
-            )
-        return emitFromRmcnmv(
-            videoId = videoId,
-            inKey = inKey,
-            label = label,
-            errorTag = "video #$videoNo",
-            callback = callback,
-        )
-    }
-
-    /**
-     * Hits Naver's RMC video player play-info API and emits ExtractorLinks
-     * for every quality available. Strategy:
-     *   1. Emit each progressive MP4 from `videos.list[]` — these are
-     *      single-quality, single-file streams with the auth token already
-     *      embedded in the URL. Most reliable for downstream players.
-     *   2. Then emit the HLS master from `streams[type=HLS]` with the
-     *      `_lsu_sa_` query token appended, so users who prefer ABR can
-     *      pick the master playlist from the source menu.
-     */
-    private suspend fun emitFromRmcnmv(
-        videoId: String,
-        inKey: String,
-        label: String,
-        errorTag: String,
-        callback: (ExtractorLink) -> Unit,
-    ): Boolean {
-        val raw = ChzzkApi.getText(Endpoints.rmcnmvVodPlay(videoId = videoId, inKey = inKey))
-        val info = parseJson<RmcnmvPlayInfo>(raw)
-        var emitted = 0
-
-        // Sort MP4 entries by descending height so the largest quality lands
-        // at the top of the player source menu.
-        val mp4Entries = info.videos?.list.orEmpty()
-            .filter { !it.source.isNullOrBlank() }
-            .sortedByDescending { it.encodingOption?.height ?: 0 }
-        for (entry in mp4Entries) {
-            val height = entry.encodingOption?.height ?: 0
-            val qualityName = entry.encodingOption?.name ?: entry.encodingOption?.id ?: "MP4"
-            callback(
-                ExtractorLink(
-                    source = name,
-                    name = "$name · $label · $qualityName",
-                    url = entry.source!!,
-                    referer = Urls.WEB_BASE,
-                    quality = height,
-                    type = ExtractorLinkType.VIDEO,
-                )
-            )
-            emitted++
-        }
-
-        // HLS master playlist for ABR-capable players. The `keys` list carries
-        // a single `{type: "param", name: "_lsu_sa_", value: ...}` entry that
-        // must be appended to every HLS URL.
-        val hls = info.streams.firstOrNull { it.type.equals("HLS", ignoreCase = true) }
-        val hlsSource = hls?.source
-        if (hls != null && !hlsSource.isNullOrBlank()) {
-            val authQuery = hls.keys
-                .filter { it.type == "param" && !it.name.isNullOrBlank() && !it.value.isNullOrBlank() }
-                .joinToString("&") { "${it.name}=${it.value}" }
-            val finalUrl = if (authQuery.isBlank()) hlsSource
-            else if (hlsSource.contains('?')) "$hlsSource&$authQuery"
-            else "$hlsSource?$authQuery"
-            callback(
-                ExtractorLink(
-                    source = name,
-                    name = "$name · $label · HLS (ABR)",
-                    url = finalUrl,
-                    referer = Urls.WEB_BASE,
-                    quality = 0,
-                    type = ExtractorLinkType.M3U8,
-                )
-            )
-            emitted++
-        }
-
-        if (emitted == 0) {
-            throw ErrorLoadingException("재생 정보를 찾지 못했습니다 ($errorTag).")
-        }
-        return true
-    }
-
-    /**
-     * Hits api-videohub.naver.com /shortformhub/feeds/v9/card and emits one
-     * ExtractorLink per AdaptationSet Representation. MP4 variants are
-     * sorted ahead of HLS so the player auto-picks the simpler stream.
-     * Shared by clip and ABR_HLS VOD playback paths.
-     */
-    private suspend fun emitFromVideohub(
-        playInfoUrl: String,
-        label: String,
-        sourceLabel: String,
-        errorTag: String,
-        callback: (ExtractorLink) -> Unit,
-    ): Boolean {
-        val raw = ChzzkApi.getText(playInfoUrl)
-        val envelope = parseJson<ShortformCardEnvelope>(raw)
-        val vod = envelope.card?.content?.vod
-        if (vod?.playable != true) {
-            throw ErrorLoadingException("재생할 수 없습니다 ($errorTag).")
-        }
-        val adaptationSets = vod.playback?.mpd?.firstOrNull()
-            ?.period?.firstOrNull()
-            ?.adaptationSet
-            .orEmpty()
-        if (adaptationSets.isEmpty()) {
-            throw ErrorLoadingException("재생 정보를 찾지 못했습니다 ($errorTag).")
-        }
-        val ordered = adaptationSets.sortedBy { aset ->
-            when (aset.mimeType) {
-                "video/mp4" -> 0
-                "video/mp2t", "application/vnd.apple.mpegurl" -> 1
-                else -> 2
-            }
-        }
-        var emitted = 0
-        for (aset in ordered) {
-            val rep = aset.representation.firstOrNull() ?: continue
-            val url = rep.baseUrl.firstOrNull()?.takeIf { it.isNotBlank() } ?: continue
-            val isM3u8 = aset.mimeType?.contains("mpegurl", ignoreCase = true) == true ||
-                    aset.mimeType == "video/mp2t" ||
-                    url.contains(".m3u8")
-            val height = rep.height?.toIntOrNull() ?: 0
-            callback(
-                ExtractorLink(
-                    source = sourceLabel,
-                    name = "$sourceLabel · $label (${aset.mimeType ?: "?"})",
-                    url = url,
-                    referer = Urls.WEB_BASE,
-                    quality = height,
-                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                )
-            )
-            emitted++
-        }
-        return emitted > 0
-    }
-
-    private suspend fun emitMediaLinks(
-        mediaList: List<com.ouor.chzzk.models.PlaybackMedia>,
-        label: String,
-        isLive: Boolean,
-        callback: (ExtractorLink) -> Unit,
-    ): Boolean {
-        // For live we offer both standard HLS and low-latency LLHLS as separate
-        // entries — users pick from the player menu. For VOD only standard HLS
-        // exists in the playback payload, so the loop emits one entry.
-        // M3u8Helper.generateM3u8 fetches the master and returns one
-        // ExtractorLink per EXT-X-STREAM-INF variant, giving the player a
-        // proper quality menu (1080p / 720p / 480p / 360p / 144p).
-        //
-        // Order is normally HLS-first, but the user can flip the preference
-        // via the settings fragment (ChzzkSettings.preferLowLatency). When
-        // flipped, LLHLS is sorted first so the player auto-selects the
-        // low-latency variant.
-        val preferLlhls = ChzzkSettings.current().preferLowLatency
-        val ordered = mediaList.sortedBy {
-            when (it.mediaId) {
-                "HLS" -> if (preferLlhls) 1 else 0
-                "LLHLS" -> if (preferLlhls) 0 else 1
-                else -> 2
-            }
-        }
-        var emitted = 0
-        for (media in ordered) {
-            if (media.protocol?.uppercase() != "HLS") continue
-            val sourceLabel = when (media.mediaId.uppercase()) {
-                "LLHLS" -> "$name (저지연)"
-                "HLS" -> name
-                else -> "$name ${media.mediaId}"
-            }
-            val variants = runCatching {
-                M3u8Helper.generateM3u8(
-                    source = sourceLabel,
-                    streamUrl = media.path,
-                    referer = Urls.WEB_BASE,
-                )
-            }.getOrNull()
-
-            if (!variants.isNullOrEmpty()) {
-                variants.forEach(callback)
-                emitted += variants.size
-            } else {
-                // Master expansion failed — emit a single link pointing at the
-                // master m3u8 so ExoPlayer can do its own ABR selection.
-                callback(
-                    ExtractorLink(
-                        source = sourceLabel,
-                        name = "$sourceLabel · $label",
-                        url = media.path,
-                        referer = Urls.WEB_BASE,
-                        quality = qualityFromTracks(media.encodingTrack),
-                        type = ExtractorLinkType.M3U8,
-                    )
-                )
-                emitted++
-            }
-        }
-        return emitted > 0
-    }
-
-    // ----------------------------------------------------------------- helpers
-
-    private suspend fun fetchLiveDetail(channelId: String): LiveDetail {
-        val raw = ChzzkApi.getText(Endpoints.liveDetail(channelId))
-        val res = parseJson<ChzzkResponse<LiveDetail>>(raw)
-        ChzzkApi.checkOk(res.code, res.message, "live-detail $channelId")
-        return res.content ?: throw ErrorLoadingException("live-detail content 누락")
-    }
-
-    private suspend fun fetchVideoDetail(videoNo: Long): VideoDetail {
-        val raw = ChzzkApi.getText(Endpoints.videoDetail(videoNo))
-        val res = parseJson<ChzzkResponse<VideoDetail>>(raw)
-        ChzzkApi.checkOk(res.code, res.message, "video $videoNo")
-        return res.content ?: throw ErrorLoadingException("video content 누락")
-    }
-
-    /**
-     * Fetch the per-channel live recommendation strip (`/live-recommended`)
-     * and flatten every recommended bucket into a single SearchResponse list.
-     * Adult lives are filtered out so they are never recommended on a
-     * non-authenticated client.
-     */
-    private suspend fun fetchLiveRecommendations(channelId: String): List<SearchResponse> {
-        val raw = ChzzkApi.getText(Endpoints.channelLiveRecommended(channelId))
-        val res = parseJson<ChzzkResponse<LiveRecommendedResponse>>(raw)
-        if (res.code != 200) return emptyList()
-        return res.content?.recommendedContents.orEmpty()
-            .flatMap { it.lives }
-            .filterNot { it.adult || it.channel.channelId == channelId }
-            .distinctBy { it.liveId }
-            .take(20)
-            .map { it.toSearchResponse() }
-    }
-
-    /**
-     * Walk the page-based VOD list for a channel and return up to
-     * [MAX_CHANNEL_VIDEOS] entries. Stops early when the API reports the last
-     * page or when the cap is reached. Each page is 30 items, so the default
-     * cap of 120 means at most 4 round-trips for the largest channels.
-     */
-    private suspend fun fetchAllChannelVideos(channelId: String): List<VideoSummary> {
-        val collected = mutableListOf<VideoSummary>()
-        val pageSize = 30
-        var page = 0
-        while (collected.size < MAX_CHANNEL_VIDEOS) {
-            val raw = ChzzkApi.getText(Endpoints.channelVideos(channelId, page = page, size = pageSize))
-            val res = parseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
-            ChzzkApi.checkOk(res.code, res.message, "channel videos $channelId p=$page")
-            val data = res.content?.data.orEmpty()
-            collected += data
-            val totalPages = res.content?.totalPages ?: 0
-            if (data.isEmpty() || page + 1 >= totalPages) break
-            page++
-        }
-        return collected.take(MAX_CHANNEL_VIDEOS)
-    }
-
-    private fun encodePlayLink(link: PlayLink): String =
-        listOf(
-            link.kind.name,
-            link.id,
-            link.title?.replace("|", "／").orEmpty(),
-            link.extra?.replace("|", "／").orEmpty(),
-        ).joinToString("|")
-
-    private fun decodePlayLink(data: String): PlayLink? {
-        val parts = data.split("|", limit = 4)
-        if (parts.size < 2) return null
-        val kind = runCatching { PlayLink.Kind.valueOf(parts[0]) }.getOrNull() ?: return null
-        return PlayLink(
-            kind = kind,
-            id = parts[1],
-            title = parts.getOrNull(2)?.takeIf { it.isNotBlank() },
-            extra = parts.getOrNull(3)?.takeIf { it.isNotBlank() },
-        )
-    }
-
-    private fun LiveSummary.toSearchResponse(): LiveSearchResponse {
-        val verified = if (channel.verifiedMark) "✓ " else ""
-        val viewers = if (concurrentUserCount > 0) " · ${formatViewers(concurrentUserCount)}" else ""
-        val watchParty = if (watchPartyNo != null) "👥 " else ""
-        val title = "$watchParty$verified${channel.channelName ?: channel.channelId}$viewers"
-        return newLiveSearchResponse(
-            name = if (liveTitle.isNullOrBlank()) title else "$title · $liveTitle",
-            url = Urls.live(channel.channelId),
-            type = TvType.Live,
-        ) {
-            posterUrl = liveImageUrl?.let { fillThumb(it) } ?: defaultThumbnailImageUrl ?: channel.channelImageUrl
-        }
-    }
-
-    private fun formatViewers(count: Int): String = when {
-        count >= 10000 -> "%.1f만명".format(count / 10000.0)
-        count >= 1000 -> "${count / 1000}.${(count % 1000) / 100}천명"
-        else -> "${count}명"
-    }
-
-    private fun VideoSummary.toMovieSearchResponse(
-        channelName: String?,
-        prefix: String = "",
-    ): MovieSearchResponse {
-        val base = listOfNotNull(channelName, videoTitle).joinToString(" · ").ifBlank { "video #$videoNo" }
-        return newMovieSearchResponse(
-            name = "$prefix$base",
-            url = Urls.video(videoNo),
-            type = TvType.Movie,
-        ) {
-            posterUrl = thumbnailImageUrl
-        }
-    }
-
-    private fun fillThumb(template: String, type: String = "720"): String =
-        template.replace("{type}", type)
-
-    private fun buildPlot(detail: LiveDetail): String = buildString {
-        append(detail.channel.channelName ?: detail.channel.channelId)
-        if (detail.liveCategoryValue != null) append(" · ${detail.liveCategoryValue}")
-        appendLine()
-        append("동시 시청자 ${detail.concurrentUserCount}명")
-        if (!detail.openDate.isNullOrBlank()) {
-            appendLine()
-            append("방송 시작 ${detail.openDate}")
-        }
-        if (detail.timeMachineActive) {
-            appendLine()
-            append("⏪ 타임머신: 되감기 가능")
-        }
-        if (detail.watchPartyNo != null) {
-            appendLine()
-            append("👥 WatchParty #${detail.watchPartyNo}")
-            if (!detail.watchPartyTag.isNullOrBlank()) append(" · ${detail.watchPartyTag}")
-        }
-    }
-
-    /**
-     * Append weekly donation top-N, chat rules, café connection, and shop
-     * info to a base plot. All fetches are best-effort — failures are
-     * silently swallowed because the plot is metadata enrichment, not
-     * core functionality.
-     */
-    private suspend fun augmentPlotWithCommunity(base: String, channelId: String): String {
-        val rankers = runCatching {
-            val raw = ChzzkApi.getText(Endpoints.donationRankWeekly(channelId, rankCount = 5))
-            parseJson<ChzzkResponse<DonationRankResponse>>(raw)
-                .content?.rankList.orEmpty()
-        }.getOrDefault(emptyList<DonationRanker>())
-
-        val rules = runCatching {
-            val raw = ChzzkApi.getText(Endpoints.chatRules(channelId))
-            parseJson<ChzzkResponse<ChatRules>>(raw).content
-        }.getOrNull()
-
-        val cafe = runCatching {
-            val raw = ChzzkApi.getText(Endpoints.channelCafeConnection(channelId))
-            parseJson<ChzzkResponse<CafeConnection>>(raw).content
-        }.getOrNull()
-
-        val logPower = runCatching {
-            val raw = ChzzkApi.getText(Endpoints.logPowerWeekly(channelId))
-            parseJson<ChzzkResponse<LogPowerWeekly>>(raw).content
-        }.getOrNull()
-
-        val shop = runCatching {
-            val raw = ChzzkApi.getText(Endpoints.streamerShopProducts(channelId))
-            parseJson<ChzzkResponse<StreamerShopProducts>>(raw).content
-        }.getOrNull()
-
-        return buildString {
-            append(base)
-            if (rankers.isNotEmpty()) {
-                appendLine().appendLine()
-                appendLine("💝 주간 후원 TOP")
-                rankers.take(5).forEach { r ->
-                    val verified = if (r.verifiedMark) "✓ " else ""
-                    appendLine("${r.ranking}. $verified${r.nickName ?: "익명"} — ${formatCurrency(r.donationAmount)}")
-                }
-            }
-            if (logPower != null && logPower.rankList.isNotEmpty()) {
-                appendLine().appendLine()
-                appendLine("⚡ 주간 로그파워 TOP")
-                logPower.rankList.take(3).forEach { r ->
-                    appendLine("${r.ranking}. ${r.nickName ?: "익명"} — ${formatCurrency(r.logPower)} LP")
-                }
-            }
-            if (cafe?.cafe != null && !cafe.cafe.name.isNullOrBlank()) {
-                appendLine().appendLine()
-                append("☕ 연결된 카페: ${cafe.cafe.name}")
-            }
-            if (shop != null && shop.totalCount > 0) {
-                appendLine().appendLine()
-                append("🛒 스트리머 상점: ${shop.totalCount}개 상품")
-            }
-            if (rules != null && !rules.rule.isNullOrBlank()) {
-                appendLine().appendLine()
-                appendLine("📋 채팅 규칙")
-                append(rules.rule.lineSequence().take(4).joinToString("\n").take(400))
-                if (rules.rule.length > 400) append("…")
-            }
-        }
-    }
-
-    private fun formatCurrency(amount: Long): String = when {
-        amount >= 10_000 -> "%.1f만원".format(amount / 10_000.0)
-        else -> "${amount}원"
-    }
-
-    private fun buildVideoPlot(detail: VideoDetail): String = buildString {
-        if (detail.channel?.channelName != null) appendLine(detail.channel.channelName)
-        if (detail.videoCategoryValue != null) appendLine("카테고리: ${detail.videoCategoryValue}")
-        if (!detail.publishDate.isNullOrBlank()) appendLine("게시 ${detail.publishDate}")
-        append("조회 ${detail.readCount}회")
-    }
-
-    private fun buildTags(category: String?, tags: List<String>?): List<String> {
-        val out = mutableListOf<String>()
-        if (!category.isNullOrBlank()) out += category
-        if (tags != null) out += tags
-        return out.distinct()
-    }
-
-    private fun qualityFromTracks(tracks: List<com.ouor.chzzk.models.EncodingTrack>): Int {
-        // Heuristic: report the master's max height; CloudStream uses Quality
-        // ints aligned to vertical resolution.
-        return tracks.mapNotNull { it.videoHeight }.maxOrNull() ?: 0
+        val link = PlayLink.decode(data) ?: return false
+        return emitPlayLink(link, callback)
     }
 
     companion object {
@@ -1191,8 +439,5 @@ class ChzzkProvider : MainAPI() {
         private const val SECTION_HOME = "__HOME__"
         private const val SECTION_PARTNERS = "__PARTNERS__"
         private const val SECTION_SCHEDULE = "__SCHEDULE__"
-
-        /** Hard cap on VODs collected per channel page (4 API pages). */
-        private const val MAX_CHANNEL_VIDEOS = 120
     }
 }
