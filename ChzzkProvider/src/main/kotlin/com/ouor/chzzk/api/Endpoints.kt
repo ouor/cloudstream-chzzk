@@ -47,6 +47,9 @@ object Endpoints {
 
     fun channel(channelId: String) = "$API_BASE/service/v1/channels/$channelId"
 
+    fun channelLiveRecommended(channelId: String) =
+        "$API_BASE/service/v1/channels/$channelId/live-recommended"
+
     fun channelVideos(channelId: String, page: Int = 0, size: Int = 30) =
         "$API_BASE/service/v1/channels/$channelId/videos" +
                 "?sortType=LATEST&pagingType=PAGE&page=$page&size=$size&publishDateAt=&videoType="

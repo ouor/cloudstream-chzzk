@@ -32,6 +32,7 @@ import com.ouor.chzzk.models.ChzzkResponse
 import com.ouor.chzzk.models.HomeMain
 import com.ouor.chzzk.models.LiveDetail
 import com.ouor.chzzk.models.LivePlayback
+import com.ouor.chzzk.models.LiveRecommendedResponse
 import com.ouor.chzzk.models.LiveSummary
 import com.ouor.chzzk.models.PageData
 import com.ouor.chzzk.models.ProgramSchedule
@@ -344,6 +345,7 @@ class ChzzkProvider : MainAPI() {
         if (detail.blindType != null) {
             throw ErrorLoadingException("이 방송은 시청이 제한되었습니다 (${detail.blindType}).")
         }
+        val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
         return newLiveStreamLoadResponse(
             name = detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live",
             url = url,
@@ -352,6 +354,7 @@ class ChzzkProvider : MainAPI() {
             posterUrl = detail.liveImageUrl?.let { fillThumb(it) } ?: detail.channel.channelImageUrl
             plot = buildPlot(detail)
             tags = buildTags(detail.liveCategoryValue, detail.tags)
+            recommendations = recs
         }
     }
 
@@ -366,6 +369,14 @@ class ChzzkProvider : MainAPI() {
         if (detail.blindType != null) {
             throw ErrorLoadingException("이 영상은 시청이 제한되었습니다 (${detail.blindType}).")
         }
+        // Surface prev/next VOD navigation + same-channel recommendations.
+        val nav = listOfNotNull(
+            detail.prevVideo?.toMovieSearchResponse(detail.channel?.channelName, prefix = "← 이전: "),
+            detail.nextVideo?.toMovieSearchResponse(detail.channel?.channelName, prefix = "→ 다음: "),
+        )
+        val channelRecs = detail.channel?.channelId?.let { id ->
+            runCatching { fetchLiveRecommendations(id) }.getOrDefault(emptyList())
+        }.orEmpty()
         return newMovieLoadResponse(
             name = detail.videoTitle ?: "video #$videoNo",
             url = url,
@@ -377,6 +388,10 @@ class ChzzkProvider : MainAPI() {
             tags = buildTags(detail.videoCategoryValue, detail.tags)
             year = detail.publishDate?.take(4)?.toIntOrNull()
             duration = (detail.duration / 60L).toInt().takeIf { it > 0 }
+            recommendations = nav + channelRecs
+            // CloudStream renders a "trailer" affordance when present; reuse
+            // Chzzk's pre-roll trailer file when available.
+            detail.trailerUrl?.let { addTrailer(it, referer = Urls.WEB_BASE) }
         }
     }
 
@@ -418,6 +433,7 @@ class ChzzkProvider : MainAPI() {
             }
         }
 
+        val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
         return newTvSeriesLoadResponse(
             name = info.channelName ?: channelId,
             url = url,
@@ -427,6 +443,7 @@ class ChzzkProvider : MainAPI() {
             posterUrl = info.channelImageUrl
             plot = info.channelDescription
             tags = buildTags(live?.liveCategoryValue, live?.tags)
+            recommendations = recs
         }
     }
 
@@ -559,6 +576,24 @@ class ChzzkProvider : MainAPI() {
     }
 
     /**
+     * Fetch the per-channel live recommendation strip (`/live-recommended`)
+     * and flatten every recommended bucket into a single SearchResponse list.
+     * Adult lives are filtered out so they are never recommended on a
+     * non-authenticated client.
+     */
+    private suspend fun fetchLiveRecommendations(channelId: String): List<SearchResponse> {
+        val raw = ChzzkApi.get(Endpoints.channelLiveRecommended(channelId)).text
+        val res = parseJson<ChzzkResponse<LiveRecommendedResponse>>(raw)
+        if (res.code != 200) return emptyList()
+        return res.content?.recommendedContents.orEmpty()
+            .flatMap { it.lives }
+            .filterNot { it.adult || it.channel.channelId == channelId }
+            .distinctBy { it.liveId }
+            .take(20)
+            .map { it.toSearchResponse() }
+    }
+
+    /**
      * Walk the page-based VOD list for a channel and return up to
      * [MAX_CHANNEL_VIDEOS] entries. Stops early when the API reports the last
      * page or when the cap is reached. Each page is 30 items, so the default
@@ -610,10 +645,13 @@ class ChzzkProvider : MainAPI() {
         else -> "${count}명"
     }
 
-    private fun VideoSummary.toMovieSearchResponse(channelName: String?): MovieSearchResponse {
-        val title = listOfNotNull(channelName, videoTitle).joinToString(" · ").ifBlank { "video #$videoNo" }
+    private fun VideoSummary.toMovieSearchResponse(
+        channelName: String?,
+        prefix: String = "",
+    ): MovieSearchResponse {
+        val base = listOfNotNull(channelName, videoTitle).joinToString(" · ").ifBlank { "video #$videoNo" }
         return newMovieSearchResponse(
-            name = title,
+            name = "$prefix$base",
             url = Urls.video(videoNo),
             type = TvType.Movie,
         ) {
