@@ -30,6 +30,7 @@ import com.ouor.chzzk.api.Endpoints
 import com.ouor.chzzk.auth.ChzzkAuth
 import com.ouor.chzzk.models.CafeConnection
 import com.ouor.chzzk.models.ChatRules
+import com.ouor.chzzk.models.ClipDetail
 import com.ouor.chzzk.models.DonationRankResponse
 import com.ouor.chzzk.models.DonationRanker
 import com.ouor.chzzk.models.LogPowerWeekly
@@ -501,26 +502,59 @@ class ChzzkProvider : MainAPI() {
     }
 
     private suspend fun loadClip(url: String, clipUID: String): LoadResponse {
-        // Best-effort clip support: the official capture set does not include a
-        // clip play-info endpoint, so we fetch the public clip web page and
-        // scrape the embedded playback metadata. This works because Chzzk
-        // ships a Next.js-style __NEXT_DATA__ JSON blob containing the same
-        // information the real player uses.
-        val pageHtml = runCatching { ChzzkApi.getText(Urls.clip(clipUID)) }.getOrNull()
-            ?: throw ErrorLoadingException("클립 페이지를 불러오지 못했습니다 ($clipUID).")
-        val clip = ClipScraper.parse(pageHtml)
-            ?: throw ErrorLoadingException(
-                "클립 재생 정보를 찾지 못했습니다. 사이트 구조가 바뀌었을 수 있습니다 ($clipUID)."
-            )
+        // Metadata comes from the official endpoint
+        // GET /service/v1/clips/{clipUID}/detail (verified against the
+        // April 2026 capture set). Playback URL is still resolved by
+        // scraping the clip page in emitClipLinks since clipDetail only
+        // carries `videoId` + `vodStatus`, not the actual m3u8 URL.
+        val raw = ChzzkApi.getText(Endpoints.clipDetail(clipUID))
+        val res = parseJson<ChzzkResponse<ClipDetail>>(raw)
+        ChzzkApi.checkOk(res.code, res.message, "clip $clipUID")
+        val detail = res.content
+            ?: throw ErrorLoadingException("클립 정보를 불러오지 못했습니다 ($clipUID).")
+
+        if (detail.adult && !ChzzkAuth.current().isLoggedIn) {
+            throw ErrorLoadingException("성인 클립입니다. 로그인 후 성인 인증된 계정으로 이용해주세요.")
+        }
+        if (detail.blindType != null) {
+            throw ErrorLoadingException("이 클립은 시청이 제한되었습니다 (${detail.blindType}).")
+        }
+        if (detail.vodStatus != null && detail.vodStatus != "ABR_HLS" && detail.vodStatus != "NONE") {
+            throw ErrorLoadingException("재생할 수 없는 클립입니다 (vodStatus=${detail.vodStatus}).")
+        }
+
+        val owner = detail.optionalProperty?.ownerChannel
+        val maker = detail.optionalProperty?.makerChannel
+        val plotText = buildString {
+            owner?.channelName?.let { append("채널: $it") }
+            if (maker != null && maker.channelId != owner?.channelId && !maker.channelName.isNullOrBlank()) {
+                if (isNotEmpty()) appendLine()
+                append("클립 작성자: ${maker.channelName}")
+            }
+            if (!detail.clipCategory.isNullOrBlank()) {
+                if (isNotEmpty()) appendLine()
+                append("카테고리: ${detail.clipCategory}")
+            }
+            if (!detail.createdDate.isNullOrBlank()) {
+                if (isNotEmpty()) appendLine()
+                append("게시 ${detail.createdDate}")
+            }
+            if (detail.krOnlyViewing) {
+                if (isNotEmpty()) appendLine()
+                append("🇰🇷 한국 지역에서만 시청 가능 (해외 IP 차단)")
+            }
+        }
         return newMovieLoadResponse(
-            name = clip.title ?: "Chzzk Clip",
+            name = detail.clipTitle ?: "Chzzk Clip",
             url = url,
             type = TvType.Movie,
-            dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.CLIP, clipUID, clip.title)),
+            dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.CLIP, clipUID, detail.clipTitle)),
         ) {
-            posterUrl = clip.thumbnailUrl
-            plot = clip.channelName?.let { "채널: $it" }
-            duration = clip.durationSec?.let { (it / 60).takeIf { m -> m > 0 } }
+            posterUrl = detail.thumbnailImageUrl ?: owner?.channelImageUrl
+            plot = plotText.takeIf { it.isNotBlank() }
+            tags = listOfNotNull(detail.clipCategory).filter { it.isNotBlank() }
+            year = detail.createdDate?.take(4)?.toIntOrNull()
+            duration = (detail.duration / 60L).toInt().takeIf { it > 0 }
         }
     }
 

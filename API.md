@@ -433,7 +433,82 @@ videoChats: [{
 ---
 
 ## 클립 (Clip)
-채널 클립은 `[/service/v1/channels/{channelId}/clips](#get-servicev1channelschannelidclips)` 참고.
+
+채널의 클립 목록은 [`/service/v1/channels/{channelId}/clips`](#get-servicev1channelschannelidclips)에서 가져옵니다. 단일 클립 메타데이터는 다음 두 엔드포인트로 조회합니다.
+
+### `GET /service/v1/clips/{clipUID}/detail` ⭐
+**클립 단건 상세** — CloudStream `loadClip`에서 사용. 2026-04-26 캡처에서 발견.
+
+**Query (모두 옵션, 반복 가능)**
+| 이름 | 예시 | 설명 |
+|---|---|---|
+| `optionalProperties` | `COMMENT` | 댓글 수 (`commentCount`) 포함 |
+| `optionalProperties` | `PRIVATE_USER_BLOCK` | 시청자 차단 여부 |
+| `optionalProperties` | `PENALTY` | 패널티 여부 |
+| `optionalProperties` | `MAKER_CHANNEL` | 클립 작성자 채널 정보 |
+| `optionalProperties` | `OWNER_CHANNEL` | 영상 원본 채널 정보 |
+
+**Response.content**
+```json
+{
+  "clipUID": "mEnwWLxYqn",
+  "videoId": "3C8DF44C96A26217490A1AB575D276BEF723",
+  "clipTitle": "캬 이거지~",
+  "thumbnailImageUrl": "https://video-phinf.pstatic.net/.../...JPEG/...jpg",
+  "categoryType": "ETC",
+  "clipCategory": "talk",
+  "duration": 10,
+  "adult": false,
+  "blindType": null,
+  "krOnlyViewing": false,
+  "vodStatus": "ABR_HLS",
+  "recId": "{\"seedClipUID\":\"...\",\"fromType\":\"GLOBAL\",\"listType\":\"RECOMMEND\"}",
+  "createdDate": "2024-08-02 21:06:30",
+  "commentActive": true,
+  "optionalProperty": {
+    "commentCount": 2,
+    "hasDeletePermission": false,
+    "privateUserBlock": false,
+    "penalty": false,
+    "makerChannel": { "channelId", "channelName", "channelImageUrl", "verifiedMark" },
+    "ownerChannel": { "channelId", "channelName", "channelImageUrl", "verifiedMark" }
+  }
+}
+```
+
+**주의**: 응답에는 `videoId`(VOD/Live와 동일한 36-char hex)만 있고 **재생 URL은 포함되지 않습니다.** 실제 m3u8을 얻으려면 추가 작업이 필요합니다 (아래 §재생 URL 구성 참고).
+
+`vodStatus = "ABR_HLS"`이면 재생 가능, 그 외 값(예: `NONE`, `EXPIRED`)이면 만료/제거된 클립.
+
+### `POST /service/v1/clips/detail-bulk`
+**클립 여러 건 한 번에 조회** — 클립 캐러셀에서 사용. CloudStream에선 미사용.
+
+**Request body**
+```json
+{
+  "clipUIDList": ["ENxScI0jLA", "OFPEXMBuJd", "..."],
+  "optionalProperties": ["COMMENT", "PRIVATE_USER_BLOCK", "PENALTY", "MAKER_CHANNEL", "OWNER_CHANNEL"]
+}
+```
+
+**Response.content**
+```json
+{
+  "metaMap": {
+    "<clipUID>": ClipDetail,
+    ...
+  }
+}
+```
+즉 단건 detail의 `content`와 동일한 객체를 `metaMap[clipUID]`에 매핑하여 반환.
+
+### 클립 재생 URL (미해결)
+캡처에 클립의 m3u8을 직접 반환하는 엔드포인트가 없습니다. 추정 후보:
+- `GET /service/v1/play-info/clip/{clipUID}` — 검증 안 됨
+- `GET /service/v1/clips/{clipUID}/play-info` — 검증 안 됨
+- 클립 페이지 (`https://chzzk.naver.com/clips/{clipUID}`) HTML의 `__NEXT_DATA__` 안에 inline 됨 — 부분 검증 됨
+
+현재 구현(`ClipScraper.kt`)은 페이지를 GET하여 `__NEXT_DATA__` 블록의 m3u8 URL을 정규식으로 추출. 사이트 구조가 바뀌면 깨질 수 있어 추후 정식 엔드포인트가 식별되면 교체해야 합니다.
 
 ---
 
@@ -704,8 +779,10 @@ v1과 동일 응답, v2 경로.
 | `search(query)` | `GET /service/v1/search/channels?keyword=...&offset=0&size=33`<br>+ `GET /service/v1/search/lives` / `search/videos`<br>(autocomplete: `search/channels/auto-complete`) |
 | `load(channelUrl)` (라이브 채널) | `GET /service/v1/channels/{channelId}` (메타) +<br>`GET /service/v3.3/channels/{channelId}/live-detail?cu=false&dt=...&tm=true` (현재 방송) +<br>`GET /service/v1/channels/{channelId}/videos?sortType=LATEST&pagingType=PAGE&page=0&size=30` (에피소드/VOD 목록) +<br>(선택) `GET /service/v1/channels/{channelId}/clips?orderType=RECENT&size=50` |
 | `load(videoUrl)` (단일 VOD) | `GET /service/v3/videos/{videoNo}?dt=...` |
+| `load(clipUrl)` (단일 클립) | `GET /service/v1/clips/{clipUID}/detail?optionalProperties=...` |
 | `loadLinks` (라이브) | `live-detail.content.livePlaybackJson` 파싱 → `media[].path` (HLS/LLHLS) |
 | `loadLinks` (다시보기) | `videos/{n}.content.liveRewindPlaybackJson` 파싱 → `media[].path` <br>또는 `GET /service/v1/videos/{n}/live-rewind/auto-play-info` |
+| `loadLinks` (클립) | 클립 페이지 HTML scraping (`__NEXT_DATA__`) — 정식 API 미식별 |
 
 ### 권장 호출 순서 (라이브)
 1. `GET /service/v3.3/channels/{channelId}/live-detail` 으로 `status == "OPEN"` 확인 + `livePlaybackJson` 추출
@@ -715,6 +792,11 @@ v1과 동일 응답, v2 경로.
 ### 권장 호출 순서 (다시보기)
 1. `GET /service/v3/videos/{videoNo}` (404 처리 필수 — `code != 200`)
 2. `liveRewindPlaybackJson` 파싱 → `media[0].path` 사용
+
+### 권장 호출 순서 (클립)
+1. `GET /service/v1/clips/{clipUID}/detail?optionalProperties=...` 으로 메타데이터 + `vodStatus == "ABR_HLS"` 확인
+2. 재생 URL은 클립 페이지 HTML(`https://chzzk.naver.com/clips/{clipUID}`)을 GET하여 `__NEXT_DATA__` 블록에서 m3u8 추출 (정식 API 미식별)
+3. 추출된 m3u8을 `M3u8Helper.generateM3u8`에 전달
 
 ### 주의
 - `dt` 쿼리 파라미터는 hex 4~5자리, 캡처에서는 매번 다른 값 (`245a2`, `2361d`, `22498`). 클라이언트 측에서 랜덤 생성한 값으로 보임 — 비워도 통과하는지 시도 필요.

@@ -96,6 +96,12 @@ object Endpoints {
     fun streamerShopProducts(channelId: String, catalogType: String = "CATALOG") =
         "$API_BASE/commercial/v1/streamer-shop/$channelId/products?catalogType=$catalogType"
 
+    fun clipDetail(clipUID: String) =
+        "$API_BASE/service/v1/clips/$clipUID/detail" +
+                "?optionalProperties=COMMENT&optionalProperties=PRIVATE_USER_BLOCK" +
+                "&optionalProperties=PENALTY&optionalProperties=MAKER_CHANNEL" +
+                "&optionalProperties=OWNER_CHANNEL"
+
     /**
      * The `dt` query parameter on /live-detail and /videos/{n} is a short
      * hex token that the official web client computes from page-load state.

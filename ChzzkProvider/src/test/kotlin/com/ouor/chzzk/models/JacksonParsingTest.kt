@@ -77,6 +77,18 @@ class JacksonParsingTest {
         assertFalse(page.data.isEmpty())
     }
 
+    @Test fun `clip-detail parses with optionalProperty channels`() {
+        val json = loadFixture("clip-detail.json")
+        val res: ChzzkResponse<ClipDetail> = mapper.readValue(json)
+        assertEquals(200, res.code)
+        val clip = res.content!!
+        assertEquals("ABR_HLS", clip.vodStatus)
+        assertNotNull(clip.videoId)
+        assertNotNull(clip.optionalProperty?.ownerChannel?.channelId)
+        // makerChannel can differ from ownerChannel when a fan made the clip
+        assertNotNull(clip.optionalProperty?.makerChannel?.channelId)
+    }
+
     @Test fun `category-lives parses with cursor next pointer`() {
         val json = loadFixture("category-lives.json")
         val res: ChzzkResponse<PageData<LiveSummary>> = mapper.readValue(json)
