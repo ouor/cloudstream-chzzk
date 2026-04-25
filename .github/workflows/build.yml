@@ -30,7 +30,9 @@ jobs:
           path: "builds"
       
       - name: Clean old builds
-        run: rm $GITHUB_WORKSPACE/builds/*.cs3
+        # -f so the very first run on an empty builds branch (no prior .cs3
+        # files) does not abort the pipeline.
+        run: rm -f $GITHUB_WORKSPACE/builds/*.cs3
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
