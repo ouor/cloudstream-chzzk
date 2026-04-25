@@ -241,7 +241,7 @@ class ChzzkProvider : MainAPI() {
         val pageData = res.content
         val hideAdult = !ChzzkAuth.current().isLoggedIn
         val lives = pageData?.data.orEmpty().filterNot { hideAdult && it.adult }
-        val nextMap = pageData?.page?.next
+        val nextMap = pageData?.pageCursor?.next
         val next = nextMap?.let {
             val cu = (it["concurrentUserCount"] as? Number)?.toInt()
             val li = (it["liveId"] as? Number)?.toLong()

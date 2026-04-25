@@ -15,21 +15,26 @@ import org.junit.Test
  * schema changes in a way that breaks one of our DTOs, these tests are the
  * first place it shows up.
  *
- * Fixtures live in `src/test/resources/fixtures/*.json`.
+ * Fixtures live under src/test/resources/fixtures/.
  */
 class JacksonParsingTest {
     private val mapper: ObjectMapper = ObjectMapper().registerModule(kotlinModule())
 
-    private fun loadFixture(name: String): String =
-        checkNotNull(javaClass.classLoader.getResourceAsStream("fixtures/$name")) {
+    private fun loadFixture(name: String): String {
+        val classLoader = checkNotNull(javaClass.classLoader) { "no class loader" }
+        val stream = checkNotNull(classLoader.getResourceAsStream("fixtures/$name")) {
             "Missing test fixture: fixtures/$name"
-        }.bufferedReader().use { it.readText() }
+        }
+        return stream.bufferedReader().use { it.readText() }
+    }
 
     @Test fun `live-detail parses with playback json string preserved`() {
         val json = loadFixture("live-detail.json")
         val res: ChzzkResponse<LiveDetail> = mapper.readValue(json)
         assertEquals(200, res.code)
-        val detail = assertNotNull(res.content).also { it!! }!!
+        val detail = res.content
+        assertNotNull("live-detail content must not be null", detail)
+        detail!!
         assertNotNull(detail.liveTitle)
         assertNotNull(detail.channel.channelId)
         assertEquals("OPEN", detail.status)
@@ -95,8 +100,8 @@ class JacksonParsingTest {
         assertEquals(200, res.code)
         val page = res.content!!
         assertFalse(page.data.isEmpty())
-        // cursor is a Map<String, Any?> in our PageCursor model
-        val nextCursor = page.page?.next
+        // cursor is a Map<String, Any?> exposed through PageData.pageCursor
+        val nextCursor = page.pageCursor?.next
         assertNotNull("expected page.next cursor for category lives", nextCursor)
         assertNotNull(nextCursor!!["concurrentUserCount"])
         assertNotNull(nextCursor["liveId"])
