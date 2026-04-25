@@ -96,8 +96,19 @@ object Endpoints {
     fun streamerShopProducts(channelId: String, catalogType: String = "CATALOG") =
         "$API_BASE/commercial/v1/streamer-shop/$channelId/products?catalogType=$catalogType"
 
+    /**
+     * The `dt` query parameter on /live-detail and /videos/{n} is a short
+     * hex token that the official web client computes from page-load state.
+     * Exact provenance has not been reverse-engineered (see PLAN.md §5).
+     *
+     * Captured samples are 4–5 lowercase hex chars (`245a2`, `2361d`,
+     * `22498`). Empirically the server accepts any value matching this
+     * shape, so we generate a 5-char lowercase hex token. If the server
+     * ever begins to validate `dt` server-side, this is the only place
+     * to update.
+     */
     private fun randomDt(): String =
-        (0..0xFFFFF).random().toString(16)
+        "%05x".format((0x10000..0xFFFFF).random())
 
     private fun String.urlEncode(): String =
         java.net.URLEncoder.encode(this, "UTF-8")

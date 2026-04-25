@@ -446,7 +446,11 @@ class ChzzkProvider : MainAPI() {
             throw ErrorLoadingException("이 방송은 시청이 제한되었습니다 (${detail.blindType}).")
         }
         val recs = runCatching { fetchLiveRecommendations(channelId) }.getOrDefault(emptyList())
-        val plotText = augmentPlotWithCommunity(buildPlot(detail), channelId)
+        val basePlot = buildPlot(detail)
+        val plotText = augmentPlotWithCommunity(
+            base = if (detail.krOnlyViewing) "$basePlot\n\n🇰🇷 한국 지역에서만 시청 가능 (해외 IP 차단)" else basePlot,
+            channelId = channelId,
+        )
         return newLiveStreamLoadResponse(
             name = detail.liveTitle ?: detail.channel.channelName ?: "Chzzk Live",
             url = url,

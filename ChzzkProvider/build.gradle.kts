@@ -20,3 +20,8 @@ cloudstream {
 
     iconUrl = "https://ssl.pstatic.net/static/nng/glive/icon/chzzk.png"
 }
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.13.1")
+}
