@@ -61,15 +61,37 @@ class ChzzkProvider : MainAPI() {
 
     // --------------------------------------------------------------- mainPage
 
+    /**
+     * Per-section cache of cursors discovered while paginating. Key is the
+     * section identifier (e.g. `GAME/League_of_Legends`); value maps page
+     * index → next-page query string returned by the API. The framework calls
+     * getMainPage sequentially as the user scrolls, so this lets us hop
+     * directly to page N without rewalking pages 1..N-1.
+     */
+    private val categoryCursorCache: MutableMap<String, MutableMap<Int, String>> = mutableMapOf()
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val items: List<SearchResponse> = when (val key = request.data) {
-            SECTION_HOME -> loadHome()
-            SECTION_PARTNERS -> loadPartners()
-            else -> loadCategory(key)
+        val key = request.data
+        val items: List<SearchResponse>
+        val hasNext: Boolean
+        when (key) {
+            SECTION_HOME -> {
+                items = loadHome()
+                hasNext = false
+            }
+            SECTION_PARTNERS -> {
+                items = loadPartners()
+                hasNext = false
+            }
+            else -> {
+                val (loaded, more) = loadCategoryPage(key, page)
+                items = loaded
+                hasNext = more
+            }
         }
         return newHomePageResponse(
             list = HomePageList(request.name, items, isHorizontalImages = true),
-            hasNext = false,
+            hasNext = hasNext,
         )
     }
 
@@ -101,14 +123,92 @@ class ChzzkProvider : MainAPI() {
         }
     }
 
-    private suspend fun loadCategory(key: String): List<SearchResponse> {
+    /**
+     * Walk the cursor chain for a category up to [page] (1-indexed) and return
+     * the lives discovered on that page plus a flag indicating whether the
+     * API has further pages. Cursors discovered along the way are cached so
+     * that a subsequent `page+1` call only fires a single request.
+     */
+    private suspend fun loadCategoryPage(key: String, page: Int): Pair<List<SearchResponse>, Boolean> {
         val parts = key.split("/", limit = 2)
-        if (parts.size != 2) return emptyList()
+        if (parts.size != 2) return emptyList<SearchResponse>() to false
         val (type, id) = parts
-        val raw = ChzzkApi.get(Endpoints.categoryLives(type, id, size = 30)).text
+
+        val cache = categoryCursorCache.getOrPut(key) { mutableMapOf() }
+        // Cursor for fetching `page` is whatever the API returned at the end
+        // of `page - 1`. Page 1 has no cursor.
+        var cursorConcurrent: Int? = null
+        var cursorLiveId: Long? = null
+
+        // Re-walk until we know the cursor for the target page.
+        var current = 1
+        while (current < page) {
+            val cached = cache[current]
+            if (cached != null) {
+                val (c, l) = decodeCategoryCursor(cached)
+                cursorConcurrent = c
+                cursorLiveId = l
+                current++
+                continue
+            }
+            // No cached cursor for `current` page — fetch it just to advance.
+            val intermediate = fetchCategory(type, id, cursorConcurrent, cursorLiveId)
+            val next = intermediate.next
+            if (next == null) {
+                // Stream ran dry before we reached `page`.
+                return emptyList<SearchResponse>() to false
+            }
+            cache[current] = encodeCategoryCursor(next.first, next.second)
+            cursorConcurrent = next.first
+            cursorLiveId = next.second
+            current++
+        }
+
+        val batch = fetchCategory(type, id, cursorConcurrent, cursorLiveId)
+        val next = batch.next
+        if (next != null) {
+            cache[page] = encodeCategoryCursor(next.first, next.second)
+        }
+        val items = batch.lives.filterNot { it.adult }.map { it.toSearchResponse() }
+        return items to (next != null)
+    }
+
+    private suspend fun fetchCategory(
+        type: String,
+        id: String,
+        cursorConcurrentUserCount: Int?,
+        cursorLiveId: Long?,
+    ): CategoryPage {
+        val raw = ChzzkApi.get(
+            Endpoints.categoryLives(
+                categoryType = type,
+                categoryId = id,
+                size = 30,
+                cursorConcurrentUserCount = cursorConcurrentUserCount,
+                cursorLiveId = cursorLiveId,
+            )
+        ).text
         val res = parseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
-        ChzzkApi.checkOk(res.code, res.message, "category lives $key")
-        return res.content?.data.orEmpty().filterNot { it.adult }.map { it.toSearchResponse() }
+        ChzzkApi.checkOk(res.code, res.message, "category lives $type/$id")
+        val pageData = res.content
+        val lives = pageData?.data.orEmpty()
+        val nextMap = pageData?.page?.next
+        val next = nextMap?.let {
+            val cu = (it["concurrentUserCount"] as? Number)?.toInt()
+            val li = (it["liveId"] as? Number)?.toLong()
+            if (cu != null && li != null) cu to li else null
+        }
+        return CategoryPage(lives, next)
+    }
+
+    private data class CategoryPage(val lives: List<LiveSummary>, val next: Pair<Int, Long>?)
+
+    private fun encodeCategoryCursor(concurrent: Int, liveId: Long): String =
+        "$concurrent|$liveId"
+
+    private fun decodeCategoryCursor(s: String): Pair<Int?, Long?> {
+        val parts = s.split("|", limit = 2)
+        return parts.getOrNull(0)?.toIntOrNull() to parts.getOrNull(1)?.toLongOrNull()
     }
 
     // ----------------------------------------------------------------- search
@@ -244,11 +344,7 @@ class ChzzkProvider : MainAPI() {
         val info = channelRes.content ?: throw ErrorLoadingException("채널 정보를 불러오지 못했습니다.")
 
         val live = runCatching { fetchLiveDetail(channelId) }.getOrNull()?.takeIf { it.status == "OPEN" }
-        val videos = runCatching {
-            val raw = ChzzkApi.get(Endpoints.channelVideos(channelId, page = 0, size = 30)).text
-            val res = parseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
-            res.content?.data.orEmpty()
-        }.getOrDefault(emptyList())
+        val videos = runCatching { fetchAllChannelVideos(channelId) }.getOrDefault(emptyList())
 
         val episodes = mutableListOf<Episode>()
         if (live != null) {
@@ -412,6 +508,29 @@ class ChzzkProvider : MainAPI() {
         return res.content ?: throw ErrorLoadingException("video content 누락")
     }
 
+    /**
+     * Walk the page-based VOD list for a channel and return up to
+     * [MAX_CHANNEL_VIDEOS] entries. Stops early when the API reports the last
+     * page or when the cap is reached. Each page is 30 items, so the default
+     * cap of 120 means at most 4 round-trips for the largest channels.
+     */
+    private suspend fun fetchAllChannelVideos(channelId: String): List<VideoSummary> {
+        val collected = mutableListOf<VideoSummary>()
+        val pageSize = 30
+        var page = 0
+        while (collected.size < MAX_CHANNEL_VIDEOS) {
+            val raw = ChzzkApi.get(Endpoints.channelVideos(channelId, page = page, size = pageSize)).text
+            val res = parseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
+            ChzzkApi.checkOk(res.code, res.message, "channel videos $channelId p=$page")
+            val data = res.content?.data.orEmpty()
+            collected += data
+            val totalPages = res.content?.totalPages ?: 0
+            if (data.isEmpty() || page + 1 >= totalPages) break
+            page++
+        }
+        return collected.take(MAX_CHANNEL_VIDEOS)
+    }
+
     private fun encodePlayLink(link: PlayLink): String =
         "${link.kind.name}|${link.id}|${link.title?.replace("|", "／") ?: ""}"
 
@@ -489,5 +608,8 @@ class ChzzkProvider : MainAPI() {
     companion object {
         private const val SECTION_HOME = "__HOME__"
         private const val SECTION_PARTNERS = "__PARTNERS__"
+
+        /** Hard cap on VODs collected per channel page (4 API pages). */
+        private const val MAX_CHANNEL_VIDEOS = 120
     }
 }

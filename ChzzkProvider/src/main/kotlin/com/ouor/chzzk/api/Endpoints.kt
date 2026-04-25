@@ -24,13 +24,13 @@ object Endpoints {
         return "$API_BASE/service/v2/categories/$categoryType/$categoryId/lives?$params"
     }
 
-    fun searchChannels(keyword: String, offset: Int = 0, size: Int = 20) =
+    fun searchChannels(keyword: String, offset: Int = 0, size: Int = 30) =
         "$API_BASE/service/v1/search/channels?keyword=${keyword.urlEncode()}&offset=$offset&size=$size&withFirstChannelContent=true"
 
-    fun searchLives(keyword: String, offset: Int = 0, size: Int = 20) =
+    fun searchLives(keyword: String, offset: Int = 0, size: Int = 30) =
         "$API_BASE/service/v1/search/lives?keyword=${keyword.urlEncode()}&offset=$offset&size=$size"
 
-    fun searchVideos(keyword: String, offset: Int = 0, size: Int = 20) =
+    fun searchVideos(keyword: String, offset: Int = 0, size: Int = 30) =
         "$API_BASE/service/v1/search/videos?keyword=${keyword.urlEncode()}&offset=$offset&size=$size"
 
     fun searchAutoComplete(keyword: String, size: Int = 10) =
@@ -42,8 +42,13 @@ object Endpoints {
         "$API_BASE/service/v1/channels/$channelId/videos" +
                 "?sortType=LATEST&pagingType=PAGE&page=$page&size=$size&publishDateAt=&videoType="
 
-    fun channelClips(channelId: String, orderType: String = "RECENT", size: Int = 50) =
-        "$API_BASE/service/v1/channels/$channelId/clips?clipUID=&filterType=ALL&orderType=$orderType&size=$size"
+    fun channelClips(
+        channelId: String,
+        orderType: String = "RECENT",
+        size: Int = 50,
+        cursorClipUID: String? = null,
+    ) = "$API_BASE/service/v1/channels/$channelId/clips" +
+            "?clipUID=${cursorClipUID.orEmpty()}&filterType=ALL&orderType=$orderType&size=$size"
 
     fun liveDetail(channelId: String, dt: String = randomDt()) =
         "$API_BASE/service/v3.3/channels/$channelId/live-detail?cu=false&dt=$dt&tm=true"
