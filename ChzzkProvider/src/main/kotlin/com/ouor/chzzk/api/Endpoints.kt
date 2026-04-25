@@ -120,22 +120,52 @@ object Endpoints {
      *
      * Verified against the 2026-04-26 capture of clip RpukCCV0vA.
      */
-    fun clipPlayInfo(videoId: String, clipUID: String, recId: String?): String {
-        val effectiveRecId = recId
-            ?: """{"seedClipUID":"$clipUID","fromType":"GLOBAL","listType":"RECOMMEND"}"""
+    fun clipPlayInfo(videoId: String, clipUID: String, recId: String?): String =
+        videohubPlayInfo(
+            videoId = videoId,
+            referer = "$WEB_BASE/clips/$clipUID",
+            recId = recId
+                ?: """{"seedClipUID":"$clipUID","fromType":"GLOBAL","listType":"RECOMMEND"}""",
+            clickNsc = "chzzk_url_clip",
+            clickArea = "clip_item",
+        )
+
+    /**
+     * Same /shortformhub/feeds/v9/card endpoint, but for ABR_HLS VODs reached
+     * through chzzk.naver.com/video/{videoNo}. The `videoDetail` response
+     * does not include a `liveRewindPlaybackJson` for those VODs (only
+     * live-rewind VODs do), so playback resolution falls through to the
+     * videohub endpoint exactly the way the official web player does.
+     */
+    fun vodPlayInfo(videoId: String, videoNo: Long): String =
+        videohubPlayInfo(
+            videoId = videoId,
+            referer = "$WEB_BASE/video/$videoNo",
+            recId = """{"seedVideoNo":$videoNo,"fromType":"GLOBAL","listType":"RECOMMEND"}""",
+            clickNsc = "chzzk_url_video",
+            clickArea = "video_item",
+        )
+
+    private fun videohubPlayInfo(
+        videoId: String,
+        referer: String,
+        recId: String,
+        clickNsc: String,
+        clickArea: String,
+    ): String {
         val params = listOf(
             "seedType" to "SPECIFIC",
             "serviceType" to "CHZZK",
             "seedMediaId" to videoId,
             "mediaType" to "VOD",
             "panelType" to "sdk_chzzk",
-            "referer" to "$WEB_BASE/clips/$clipUID",
+            "referer" to referer,
             "recType" to "CHZZK",
-            "recId" to effectiveRecId,
+            "recId" to recId,
             "enableReverse" to "false",
             "adAllowed" to "Y",
-            "clickNsc" to "chzzk_url_clip",
-            "clickArea" to "clip_item",
+            "clickNsc" to clickNsc,
+            "clickArea" to clickArea,
             "deviceType" to "html5_mo",
         ).joinToString("&") { (k, v) -> "$k=${v.urlEncode()}" }
         return "https://api-videohub.naver.com/shortformhub/feeds/v9/card?$params"

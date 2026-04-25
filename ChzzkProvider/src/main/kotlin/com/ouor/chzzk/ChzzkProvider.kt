@@ -676,57 +676,15 @@ class ChzzkProvider : MainAPI() {
             parseJson<ChzzkResponse<ClipDetail>>(raw).content?.videoId
         } ?: throw ErrorLoadingException("클립 videoId 조회 실패 ($clipUID).")
 
-        // Hit the official api-videohub.naver.com play-info endpoint
-        // (verified against 2026-04-26 HAR of clip RpukCCV0vA). The response
-        // carries a DASH-shaped tree with both progressive MP4 and HLS variants.
-        val rawPlayback = ChzzkApi.getText(
-            Endpoints.clipPlayInfo(videoId = resolvedVideoId, clipUID = clipUID, recId = null)
+        return emitFromVideohub(
+            playInfoUrl = Endpoints.clipPlayInfo(
+                videoId = resolvedVideoId, clipUID = clipUID, recId = null,
+            ),
+            label = title ?: clipUID,
+            sourceLabel = "$name (clip)",
+            errorTag = "clip $clipUID",
+            callback = callback,
         )
-        val envelope = parseJson<ShortformCardEnvelope>(rawPlayback)
-        val vod = envelope.card?.content?.vod
-        if (vod?.playable != true) {
-            throw ErrorLoadingException("재생할 수 없는 클립입니다 ($clipUID).")
-        }
-        val adaptationSets = vod.playback?.mpd?.firstOrNull()
-            ?.period?.firstOrNull()
-            ?.adaptationSet
-            .orEmpty()
-        if (adaptationSets.isEmpty()) {
-            throw ErrorLoadingException("클립 재생 정보를 찾지 못했습니다 ($clipUID).")
-        }
-
-        val sourceLabel = "$name (clip)"
-        var emitted = 0
-        // Prefer the progressive MP4 (single-quality, no manifest stitching);
-        // fall back to HLS if mp4 is absent. Players that prefer HLS will
-        // pick that source from the menu.
-        val ordered = adaptationSets.sortedBy { aset ->
-            when (aset.mimeType) {
-                "video/mp4" -> 0
-                "video/mp2t", "application/vnd.apple.mpegurl" -> 1
-                else -> 2
-            }
-        }
-        for (aset in ordered) {
-            val rep = aset.representation.firstOrNull() ?: continue
-            val url = rep.baseUrl.firstOrNull()?.takeIf { it.isNotBlank() } ?: continue
-            val isM3u8 = aset.mimeType?.contains("mpegurl", ignoreCase = true) == true ||
-                    aset.mimeType == "video/mp2t" ||
-                    url.contains(".m3u8")
-            val height = rep.height?.toIntOrNull() ?: 0
-            callback(
-                ExtractorLink(
-                    source = sourceLabel,
-                    name = "$sourceLabel · ${title ?: clipUID} (${aset.mimeType ?: "?"})",
-                    url = url,
-                    referer = Urls.WEB_BASE,
-                    quality = height,
-                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                )
-            )
-            emitted++
-        }
-        return emitted > 0
     }
 
     private suspend fun emitLiveLinks(
@@ -772,15 +730,94 @@ class ChzzkProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
         val detail = fetchVideoDetail(videoNo)
+        val label = title ?: detail.videoTitle ?: "video #$videoNo"
+
+        // Path 1: live-rewind VODs ship `liveRewindPlaybackJson` inline (same
+        // shape as livePlaybackJson). Use it when present.
         val playbackJson = detail.liveRewindPlaybackJson
-            ?: throw ErrorLoadingException("liveRewindPlaybackJson 누락 (vodStatus=${detail.vodStatus})")
-        val playback = parseJson<LivePlayback>(playbackJson)
-        return emitMediaLinks(
-            mediaList = playback.media,
-            label = title ?: detail.videoTitle ?: "video #$videoNo",
-            isLive = false,
+        if (!playbackJson.isNullOrBlank()) {
+            val playback = parseJson<LivePlayback>(playbackJson)
+            return emitMediaLinks(
+                mediaList = playback.media,
+                label = label,
+                isLive = false,
+                callback = callback,
+            )
+        }
+
+        // Path 2: ABR_HLS VODs (and possibly other modern VOD formats) do
+        // NOT embed liveRewindPlaybackJson. The official web player resolves
+        // their playback URL via api-videohub.naver.com, the same endpoint
+        // clips use. We fall back here using the videoId we already have.
+        // Verified against logcat reproduction:
+        //   ApiError: liveRewindPlaybackJson 누락 (vodStatus=ABR_HLS)
+        val videoId = detail.videoId
+            ?: throw ErrorLoadingException(
+                "재생 URL을 찾지 못했습니다 (videoId 누락, vodStatus=${detail.vodStatus})."
+            )
+        return emitFromVideohub(
+            playInfoUrl = Endpoints.vodPlayInfo(videoId = videoId, videoNo = videoNo),
+            label = label,
+            sourceLabel = name,
+            errorTag = "video #$videoNo",
             callback = callback,
         )
+    }
+
+    /**
+     * Hits api-videohub.naver.com /shortformhub/feeds/v9/card and emits one
+     * ExtractorLink per AdaptationSet Representation. MP4 variants are
+     * sorted ahead of HLS so the player auto-picks the simpler stream.
+     * Shared by clip and ABR_HLS VOD playback paths.
+     */
+    private suspend fun emitFromVideohub(
+        playInfoUrl: String,
+        label: String,
+        sourceLabel: String,
+        errorTag: String,
+        callback: (ExtractorLink) -> Unit,
+    ): Boolean {
+        val raw = ChzzkApi.getText(playInfoUrl)
+        val envelope = parseJson<ShortformCardEnvelope>(raw)
+        val vod = envelope.card?.content?.vod
+        if (vod?.playable != true) {
+            throw ErrorLoadingException("재생할 수 없습니다 ($errorTag).")
+        }
+        val adaptationSets = vod.playback?.mpd?.firstOrNull()
+            ?.period?.firstOrNull()
+            ?.adaptationSet
+            .orEmpty()
+        if (adaptationSets.isEmpty()) {
+            throw ErrorLoadingException("재생 정보를 찾지 못했습니다 ($errorTag).")
+        }
+        val ordered = adaptationSets.sortedBy { aset ->
+            when (aset.mimeType) {
+                "video/mp4" -> 0
+                "video/mp2t", "application/vnd.apple.mpegurl" -> 1
+                else -> 2
+            }
+        }
+        var emitted = 0
+        for (aset in ordered) {
+            val rep = aset.representation.firstOrNull() ?: continue
+            val url = rep.baseUrl.firstOrNull()?.takeIf { it.isNotBlank() } ?: continue
+            val isM3u8 = aset.mimeType?.contains("mpegurl", ignoreCase = true) == true ||
+                    aset.mimeType == "video/mp2t" ||
+                    url.contains(".m3u8")
+            val height = rep.height?.toIntOrNull() ?: 0
+            callback(
+                ExtractorLink(
+                    source = sourceLabel,
+                    name = "$sourceLabel · $label (${aset.mimeType ?: "?"})",
+                    url = url,
+                    referer = Urls.WEB_BASE,
+                    quality = height,
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                )
+            )
+            emitted++
+        }
+        return emitted > 0
     }
 
     private suspend fun emitMediaLinks(
