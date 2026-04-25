@@ -7,7 +7,7 @@
 ## Features
 - [x] Live broadcast playback (HLS / LLHLS)
 - [x] VOD (다시보기) playback with seeking
-- [ ] Clip playback (endpoint TBD — see [PLAN.md](PLAN.md) §12)
+- [x] Clip playback (api-videohub.naver.com play-info, mp4 직접 재생)
 - [x] Channel browsing — current live + recent VODs as a TvSeries
 - [x] Category browsing (LoL, TFT, Valorant, OW2, Talk)
 - [x] Korean keyword search across channels / lives / VODs

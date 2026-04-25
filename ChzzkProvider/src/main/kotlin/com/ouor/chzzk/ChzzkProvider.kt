@@ -31,6 +31,7 @@ import com.ouor.chzzk.auth.ChzzkAuth
 import com.ouor.chzzk.models.CafeConnection
 import com.ouor.chzzk.models.ChatRules
 import com.ouor.chzzk.models.ClipDetail
+import com.ouor.chzzk.models.ShortformCardEnvelope
 import com.ouor.chzzk.models.DonationRankResponse
 import com.ouor.chzzk.models.DonationRanker
 import com.ouor.chzzk.models.LogPowerWeekly
@@ -527,12 +528,6 @@ class ChzzkProvider : MainAPI() {
         val owner = detail.optionalProperty?.ownerChannel
         val maker = detail.optionalProperty?.makerChannel
         val plotText = buildString {
-            // Honest disclaimer at the top: the play-info endpoint for clips
-            // has not been reverse-engineered yet, so the play button will
-            // surface an error. The metadata view (title, channel, etc.) is
-            // still useful so we keep load() working.
-            appendLine("⚠️ 클립 재생은 아직 미지원입니다 (정식 play-info 엔드포인트 미식별).")
-            appendLine()
             owner?.channelName?.let { append("채널: $it") }
             if (maker != null && maker.channelId != owner?.channelId && !maker.channelName.isNullOrBlank()) {
                 if (isNotEmpty()) appendLine()
@@ -551,11 +546,17 @@ class ChzzkProvider : MainAPI() {
                 append("🇰🇷 한국 지역에서만 시청 가능 (해외 IP 차단)")
             }
         }
+        // Carry videoId via PlayLink.extra so emitClipLinks can hit the
+        // api-videohub play-info endpoint without re-fetching clipDetail.
+        val videoId = detail.videoId
+            ?: throw ErrorLoadingException("클립 videoId가 누락되었습니다 ($clipUID).")
         return newMovieLoadResponse(
             name = detail.clipTitle ?: "Chzzk Clip",
             url = url,
             type = TvType.Movie,
-            dataUrl = encodePlayLink(PlayLink(PlayLink.Kind.CLIP, clipUID, detail.clipTitle)),
+            dataUrl = encodePlayLink(
+                PlayLink(PlayLink.Kind.CLIP, clipUID, detail.clipTitle, extra = videoId),
+            ),
         ) {
             posterUrl = detail.thumbnailImageUrl ?: owner?.channelImageUrl
             plot = plotText.takeIf { it.isNotBlank() }
@@ -628,54 +629,75 @@ class ChzzkProvider : MainAPI() {
         return when (link.kind) {
             PlayLink.Kind.LIVE -> emitLiveLinks(link.id, link.title, callback)
             PlayLink.Kind.VOD -> emitVodLinks(link.id.toLong(), link.title, callback)
-            PlayLink.Kind.CLIP -> emitClipLinks(link.id, link.title, callback)
+            PlayLink.Kind.CLIP -> emitClipLinks(link.id, link.title, link.extra, callback)
         }
     }
 
     private suspend fun emitClipLinks(
         clipUID: String,
         title: String?,
+        videoId: String?,
         callback: (ExtractorLink) -> Unit,
     ): Boolean {
-        // The HAR capture confirmed that chzzk.naver.com is an SPA shell
-        // (~2.6 KB of HTML, no inline __NEXT_DATA__) — all data is loaded
-        // client-side via XHR. Scraping the page can therefore never yield
-        // an m3u8 URL. The official play-info endpoint for clips is still
-        // unidentified after three capture sets (one general, one clip-only,
-        // one live), so for now clip links are intentionally not emitted.
-        //
-        // ClipScraper is still attempted as a best-effort because the page
-        // *might* one day contain inline data again, but expect this branch
-        // to throw [ErrorLoadingException] on every real call.
-        val html = runCatching { ChzzkApi.getText(Urls.clip(clipUID)) }.getOrNull()
-        val clip = html?.let { ClipScraper.parse(it) }
-        val streamUrl = clip?.playbackUrl
-            ?: throw com.lagradost.cloudstream3.ErrorLoadingException(
-                "클립 재생 URL을 찾지 못했습니다. 정식 play-info 엔드포인트가 식별되면 지원 예정입니다 ($clipUID)."
-            )
-        val sourceLabel = "$name (clip)"
-        val variants = runCatching {
-            M3u8Helper.generateM3u8(
-                source = sourceLabel,
-                streamUrl = streamUrl,
-                referer = Urls.WEB_BASE,
-            )
-        }.getOrNull()
-        if (!variants.isNullOrEmpty()) {
-            variants.forEach(callback)
-            return true
-        }
-        callback(
-            ExtractorLink(
-                source = sourceLabel,
-                name = "$sourceLabel · ${title ?: clipUID}",
-                url = streamUrl,
-                referer = Urls.WEB_BASE,
-                quality = 0,
-                type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-            )
+        // Resolve videoId: usually carried via PlayLink.extra (set by loadClip),
+        // but fall back to a fresh clipDetail fetch if dataUrl came from an
+        // older cached entry that pre-dates the extra field.
+        val resolvedVideoId = videoId ?: run {
+            val raw = ChzzkApi.getText(Endpoints.clipDetail(clipUID))
+            parseJson<ChzzkResponse<ClipDetail>>(raw).content?.videoId
+        } ?: throw ErrorLoadingException("클립 videoId 조회 실패 ($clipUID).")
+
+        // Hit the official api-videohub.naver.com play-info endpoint
+        // (verified against 2026-04-26 HAR of clip RpukCCV0vA). The response
+        // carries a DASH-shaped tree with both progressive MP4 and HLS variants.
+        val rawPlayback = ChzzkApi.getText(
+            Endpoints.clipPlayInfo(videoId = resolvedVideoId, clipUID = clipUID, recId = null)
         )
-        return true
+        val envelope = parseJson<ShortformCardEnvelope>(rawPlayback)
+        val vod = envelope.card?.content?.vod
+        if (vod?.playable != true) {
+            throw ErrorLoadingException("재생할 수 없는 클립입니다 ($clipUID).")
+        }
+        val adaptationSets = vod.playback?.mpd?.firstOrNull()
+            ?.period?.firstOrNull()
+            ?.adaptationSet
+            .orEmpty()
+        if (adaptationSets.isEmpty()) {
+            throw ErrorLoadingException("클립 재생 정보를 찾지 못했습니다 ($clipUID).")
+        }
+
+        val sourceLabel = "$name (clip)"
+        var emitted = 0
+        // Prefer the progressive MP4 (single-quality, no manifest stitching);
+        // fall back to HLS if mp4 is absent. Players that prefer HLS will
+        // pick that source from the menu.
+        val ordered = adaptationSets.sortedBy { aset ->
+            when (aset.mimeType) {
+                "video/mp4" -> 0
+                "video/mp2t", "application/vnd.apple.mpegurl" -> 1
+                else -> 2
+            }
+        }
+        for (aset in ordered) {
+            val rep = aset.representation.firstOrNull() ?: continue
+            val url = rep.baseUrl.firstOrNull()?.takeIf { it.isNotBlank() } ?: continue
+            val isM3u8 = aset.mimeType?.contains("mpegurl", ignoreCase = true) == true ||
+                    aset.mimeType == "video/mp2t" ||
+                    url.contains(".m3u8")
+            val height = rep.height?.toIntOrNull() ?: 0
+            callback(
+                ExtractorLink(
+                    source = sourceLabel,
+                    name = "$sourceLabel · ${title ?: clipUID} (${aset.mimeType ?: "?"})",
+                    url = url,
+                    referer = Urls.WEB_BASE,
+                    quality = height,
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
+                )
+            )
+            emitted++
+        }
+        return emitted > 0
     }
 
     private suspend fun emitLiveLinks(
@@ -847,13 +869,23 @@ class ChzzkProvider : MainAPI() {
     }
 
     private fun encodePlayLink(link: PlayLink): String =
-        "${link.kind.name}|${link.id}|${link.title?.replace("|", "／") ?: ""}"
+        listOf(
+            link.kind.name,
+            link.id,
+            link.title?.replace("|", "／").orEmpty(),
+            link.extra?.replace("|", "／").orEmpty(),
+        ).joinToString("|")
 
     private fun decodePlayLink(data: String): PlayLink? {
-        val parts = data.split("|", limit = 3)
+        val parts = data.split("|", limit = 4)
         if (parts.size < 2) return null
         val kind = runCatching { PlayLink.Kind.valueOf(parts[0]) }.getOrNull() ?: return null
-        return PlayLink(kind = kind, id = parts[1], title = parts.getOrNull(2)?.takeIf { it.isNotBlank() })
+        return PlayLink(
+            kind = kind,
+            id = parts[1],
+            title = parts.getOrNull(2)?.takeIf { it.isNotBlank() },
+            extra = parts.getOrNull(3)?.takeIf { it.isNotBlank() },
+        )
     }
 
     private fun LiveSummary.toSearchResponse(): LiveSearchResponse {

@@ -27,7 +27,8 @@ data class ClipSummary(
  * - [vodStatus] is typically `ABR_HLS` for playable clips. Anything else
  *   should be treated like a missing/expired VOD.
  * - The response does NOT include the m3u8 URL itself — playback metadata
- *   has to be resolved separately (currently via [ClipScraper]).
+ *   has to be resolved via the api-videohub.naver.com /shortformhub
+ *   /feeds/v9/card endpoint (see [ShortformCardEnvelope]).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class ClipDetail(
@@ -61,4 +62,74 @@ data class ClipOptionalProperty(
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class ClipDetailBulk(
     val metaMap: Map<String, ClipDetail> = emptyMap(),
+)
+
+/**
+ * Response of `GET https://api-videohub.naver.com/shortformhub/feeds/v9/card`.
+ * The play-info content lives in `card.content.vod.playback` as a DASH-shaped
+ * tree where field names use the MPD vocabulary (Period, AdaptationSet,
+ * Representation, BaseURL). Jackson cannot use field names starting with `@`
+ * in Kotlin source, so MPD attribute fields are rebound via @JsonProperty.
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformCardEnvelope(
+    val card: ShortformCard? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformCard(
+    val content: ShortformCardContent? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformCardContent(
+    val mediaId: String? = null,
+    val title: String? = null,
+    val description: String? = null,
+    val mediaType: String? = null,
+    val publishedAt: String? = null,
+    val vod: ShortformVod? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformVod(
+    val playable: Boolean = false,
+    val count: Long? = null,
+    val playback: ShortformPlayback? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformPlayback(
+    @com.fasterxml.jackson.annotation.JsonProperty("\$version") val version: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("MPD") val mpd: List<ShortformMpd> = emptyList(),
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformMpd(
+    @com.fasterxml.jackson.annotation.JsonProperty("Period") val period: List<ShortformPeriod> = emptyList(),
+    @com.fasterxml.jackson.annotation.JsonProperty("@mediaPresentationDuration") val mediaPresentationDuration: String? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformPeriod(
+    @com.fasterxml.jackson.annotation.JsonProperty("AdaptationSet") val adaptationSet: List<ShortformAdaptationSet> = emptyList(),
+    @com.fasterxml.jackson.annotation.JsonProperty("@duration") val duration: String? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformAdaptationSet(
+    @com.fasterxml.jackson.annotation.JsonProperty("Representation") val representation: List<ShortformRepresentation> = emptyList(),
+    @com.fasterxml.jackson.annotation.JsonProperty("@mimeType") val mimeType: String? = null,
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ShortformRepresentation(
+    @com.fasterxml.jackson.annotation.JsonProperty("BaseURL") val baseUrl: List<String> = emptyList(),
+    @com.fasterxml.jackson.annotation.JsonProperty("@id") val id: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("@bandwidth") val bandwidth: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("@width") val width: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("@height") val height: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("@codecs") val codecs: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("@frameRate") val frameRate: String? = null,
+    @com.fasterxml.jackson.annotation.JsonProperty("@mimeType") val mimeType: String? = null,
 )

@@ -111,6 +111,34 @@ class JacksonParsingTest {
         assertNotNull(clip.optionalProperty?.makerChannel?.channelId)
     }
 
+    @Test fun `clip play-info parses MPD baseURLs for both mp4 and hls variants`() {
+        // Verifies the api-videohub.naver.com response shape that powers
+        // clip playback. Real fixture from a 2026-04-26 capture of clip
+        // RpukCCV0vA — the MPD tree carries one progressive MP4 variant
+        // (mimeType=video/mp4) and one HLS variant (mimeType=video/mp2t),
+        // each with a single Representation that has a direct BaseURL.
+        val json = loadFixture("clip-play-info.json")
+        val env: ShortformCardEnvelope = mapper.readValue(json)
+        val vod = env.card?.content?.vod
+        assertNotNull("vod node missing", vod)
+        assertTrue("vod must be playable in fixture", vod!!.playable)
+        val sets = vod.playback?.mpd?.firstOrNull()?.period?.firstOrNull()?.adaptationSet.orEmpty()
+        assertEquals("expected exactly two AdaptationSets (mp4 + hls)", 2, sets.size)
+        val mp4Set = sets.first { it.mimeType == "video/mp4" }
+        val mp4Url = mp4Set.representation.firstOrNull()?.baseUrl?.firstOrNull()
+        assertNotNull(mp4Url)
+        assertTrue(
+            "mp4 BaseURL should target the b02-kr-smp-vod CDN",
+            mp4Url!!.startsWith("https://b02-kr-smp-vod.pstatic.net/glive-clip/"),
+        )
+        assertTrue("mp4 BaseURL must include hdnts auth token", mp4Url.contains("hdnts="))
+        // Clip is a portrait shortform — width 720, height 1280. The "720P"
+        // in the qualityId label refers to the shorter dimension.
+        val rep = mp4Set.representation.first()
+        assertEquals("720", rep.width)
+        assertEquals("1280", rep.height)
+    }
+
     @Test fun `category-lives parses with cursor next pointer`() {
         val json = loadFixture("category-lives.json")
         val res: ChzzkResponse<PageData<LiveSummary>> = mapper.readValue(json)

@@ -103,6 +103,37 @@ object Endpoints {
                 "&optionalProperties=OWNER_CHANNEL"
 
     /**
+     * Official clip play-info endpoint, hosted on `api-videohub.naver.com`
+     * (separate from `api.chzzk.naver.com`). Returns a JSON envelope with a
+     * DASH-style `card.content.vod.playback.MPD[].Period[].AdaptationSet[].Representation[].BaseURL`
+     * carrying both a direct progressive MP4 (mimeType=video/mp4) and an
+     * HLS variant (mimeType=video/mp2t). The MP4 is preferred for playback
+     * because it is single-quality and needs no manifest stitching.
+     *
+     * Verified against the 2026-04-26 capture of clip RpukCCV0vA.
+     */
+    fun clipPlayInfo(videoId: String, clipUID: String, recId: String?): String {
+        val effectiveRecId = recId
+            ?: """{"seedClipUID":"$clipUID","fromType":"GLOBAL","listType":"RECOMMEND"}"""
+        val params = listOf(
+            "seedType" to "SPECIFIC",
+            "serviceType" to "CHZZK",
+            "seedMediaId" to videoId,
+            "mediaType" to "VOD",
+            "panelType" to "sdk_chzzk",
+            "referer" to "$WEB_BASE/clips/$clipUID",
+            "recType" to "CHZZK",
+            "recId" to effectiveRecId,
+            "enableReverse" to "false",
+            "adAllowed" to "Y",
+            "clickNsc" to "chzzk_url_clip",
+            "clickArea" to "clip_item",
+            "deviceType" to "html5_mo",
+        ).joinToString("&") { (k, v) -> "$k=${v.urlEncode()}" }
+        return "https://api-videohub.naver.com/shortformhub/feeds/v9/card?$params"
+    }
+
+    /**
      * The `dt` query parameter on /live-detail and /videos/{n} is a short
      * hex token that the official web client computes from page-load state.
      * Exact provenance has not been reverse-engineered (see PLAN.md §5).

@@ -12,6 +12,12 @@ data class PlayLink(
     val kind: Kind,
     val id: String,
     val title: String? = null,
+    /**
+     * Extra payload encoded after the title. Currently only used by
+     * [Kind.CLIP] to carry the 36-char hex `videoId` so [ChzzkProvider.emitClipLinks]
+     * can build the api-videohub play-info URL without re-fetching clipDetail.
+     */
+    val extra: String? = null,
 ) {
     enum class Kind { LIVE, VOD, CLIP }
 }
