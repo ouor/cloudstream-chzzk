@@ -116,7 +116,7 @@ class ChzzkProvider : MainAPI() {
     }
 
     private suspend fun loadHome(): List<SearchResponse> {
-        val raw = ChzzkApi.get(Endpoints.homeMain()).text
+        val raw = ChzzkApi.getText(Endpoints.homeMain())
         val res = parseJson<ChzzkResponse<HomeMain>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "home main")
         val home = res.content ?: return emptyList()
@@ -133,7 +133,7 @@ class ChzzkProvider : MainAPI() {
     }
 
     private suspend fun loadSchedule(): List<SearchResponse> {
-        val raw = ChzzkApi.get(Endpoints.programSchedulesComing()).text
+        val raw = ChzzkApi.getText(Endpoints.programSchedulesComing())
         val res = parseJson<ChzzkResponse<ProgramScheduleList>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "program-schedules")
         return res.content?.programSchedules.orEmpty().map { it.toSearchResponse() }
@@ -155,7 +155,7 @@ class ChzzkProvider : MainAPI() {
     }
 
     private suspend fun loadPartners(): List<SearchResponse> {
-        val raw = ChzzkApi.get(Endpoints.streamerPartners()).text
+        val raw = ChzzkApi.getText(Endpoints.streamerPartners())
         val res = parseJson<ChzzkResponse<StreamerPartnerList>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "streamer partners")
         return res.content?.streamerPartners.orEmpty().filter { it.openLive }.map { partner ->
@@ -226,7 +226,7 @@ class ChzzkProvider : MainAPI() {
         cursorConcurrentUserCount: Int?,
         cursorLiveId: Long?,
     ): CategoryPage {
-        val raw = ChzzkApi.get(
+        val raw = ChzzkApi.getText(
             Endpoints.categoryLives(
                 categoryType = type,
                 categoryId = id,
@@ -234,7 +234,7 @@ class ChzzkProvider : MainAPI() {
                 cursorConcurrentUserCount = cursorConcurrentUserCount,
                 cursorLiveId = cursorLiveId,
             )
-        ).text
+        )
         val res = parseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "category lives $type/$id")
         val pageData = res.content
@@ -273,7 +273,7 @@ class ChzzkProvider : MainAPI() {
     override suspend fun quickSearch(query: String): List<SearchResponse> {
         if (query.isBlank() || query.startsWith("#")) return search(query)
         val rawNames = runCatching {
-            ChzzkApi.get(Endpoints.searchAutoComplete(query, size = 10)).text
+            ChzzkApi.getText(Endpoints.searchAutoComplete(query, size = 10))
         }.getOrNull() ?: return search(query)
         val names = tryParseJson<ChzzkResponse<PageData<String>>>(rawNames)
             ?.content?.data
@@ -288,7 +288,7 @@ class ChzzkProvider : MainAPI() {
         val results = mutableListOf<SearchResponse>()
         val seen = mutableSetOf<String>()
         for (name in names) {
-            val raw = runCatching { ChzzkApi.get(Endpoints.searchChannels(name, size = 1)).text }.getOrNull()
+            val raw = runCatching { ChzzkApi.getText(Endpoints.searchChannels(name, size = 1)) }.getOrNull()
                 ?: continue
             val res = tryParseJson<ChzzkResponse<PageData<SearchChannelItem>>>(raw)
             val item = res?.content?.data?.firstOrNull() ?: continue
@@ -340,7 +340,7 @@ class ChzzkProvider : MainAPI() {
 
         if (typeFilter == null || typeFilter == SearchType.CHANNEL || typeFilter == SearchType.LIVE) {
             runCatching {
-                val raw = ChzzkApi.get(Endpoints.searchChannels(effectiveQuery)).text
+                val raw = ChzzkApi.getText(Endpoints.searchChannels(effectiveQuery))
                 val res = tryParseJson<ChzzkResponse<PageData<SearchChannelItem>>>(raw)
                 res?.content?.data.orEmpty().forEach { item ->
                     if (!seenChannels.add(item.channel.channelId)) return@forEach
@@ -376,7 +376,7 @@ class ChzzkProvider : MainAPI() {
 
         if (typeFilter == null || typeFilter == SearchType.LIVE) {
             runCatching {
-                val raw = ChzzkApi.get(Endpoints.searchLives(effectiveQuery)).text
+                val raw = ChzzkApi.getText(Endpoints.searchLives(effectiveQuery))
                 val res = tryParseJson<ChzzkResponse<PageData<LiveSummary>>>(raw)
                 res?.content?.data.orEmpty().forEach { live ->
                     if (!tagFilter(live.tags)) return@forEach
@@ -387,7 +387,7 @@ class ChzzkProvider : MainAPI() {
 
         if (typeFilter == null || typeFilter == SearchType.VOD) {
             runCatching {
-                val raw = ChzzkApi.get(Endpoints.searchVideos(effectiveQuery)).text
+                val raw = ChzzkApi.getText(Endpoints.searchVideos(effectiveQuery))
                 val res = tryParseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
                 res?.content?.data.orEmpty().forEach { video ->
                     if (!tagFilter(video.tags)) return@forEach
@@ -502,7 +502,7 @@ class ChzzkProvider : MainAPI() {
         // scrape the embedded playback metadata. This works because Chzzk
         // ships a Next.js-style __NEXT_DATA__ JSON blob containing the same
         // information the real player uses.
-        val pageHtml = runCatching { ChzzkApi.get(Urls.clip(clipUID)).text }.getOrNull()
+        val pageHtml = runCatching { ChzzkApi.getText(Urls.clip(clipUID)) }.getOrNull()
             ?: throw ErrorLoadingException("클립 페이지를 불러오지 못했습니다 ($clipUID).")
         val clip = ClipScraper.parse(pageHtml)
             ?: throw ErrorLoadingException(
@@ -521,7 +521,7 @@ class ChzzkProvider : MainAPI() {
     }
 
     private suspend fun loadChannel(url: String, channelId: String): LoadResponse {
-        val rawChannel = ChzzkApi.get(Endpoints.channel(channelId)).text
+        val rawChannel = ChzzkApi.getText(Endpoints.channel(channelId))
         val channelRes = parseJson<ChzzkResponse<ChannelInfo>>(rawChannel)
         ChzzkApi.checkOk(channelRes.code, channelRes.message, "channel $channelId")
         val info = channelRes.content ?: throw ErrorLoadingException("채널 정보를 불러오지 못했습니다.")
@@ -594,7 +594,7 @@ class ChzzkProvider : MainAPI() {
     ): Boolean {
         // Re-fetch the page to get a fresh playback URL — these tokens expire
         // similarly to live HLS auth tokens.
-        val html = ChzzkApi.get(Urls.clip(clipUID)).text
+        val html = ChzzkApi.getText(Urls.clip(clipUID))
         val clip = ClipScraper.parse(html) ?: return false
         val streamUrl = clip.playbackUrl ?: return false
         val sourceLabel = "$name (clip)"
@@ -739,14 +739,14 @@ class ChzzkProvider : MainAPI() {
     // ----------------------------------------------------------------- helpers
 
     private suspend fun fetchLiveDetail(channelId: String): LiveDetail {
-        val raw = ChzzkApi.get(Endpoints.liveDetail(channelId)).text
+        val raw = ChzzkApi.getText(Endpoints.liveDetail(channelId))
         val res = parseJson<ChzzkResponse<LiveDetail>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "live-detail $channelId")
         return res.content ?: throw ErrorLoadingException("live-detail content 누락")
     }
 
     private suspend fun fetchVideoDetail(videoNo: Long): VideoDetail {
-        val raw = ChzzkApi.get(Endpoints.videoDetail(videoNo)).text
+        val raw = ChzzkApi.getText(Endpoints.videoDetail(videoNo))
         val res = parseJson<ChzzkResponse<VideoDetail>>(raw)
         ChzzkApi.checkOk(res.code, res.message, "video $videoNo")
         return res.content ?: throw ErrorLoadingException("video content 누락")
@@ -759,7 +759,7 @@ class ChzzkProvider : MainAPI() {
      * non-authenticated client.
      */
     private suspend fun fetchLiveRecommendations(channelId: String): List<SearchResponse> {
-        val raw = ChzzkApi.get(Endpoints.channelLiveRecommended(channelId)).text
+        val raw = ChzzkApi.getText(Endpoints.channelLiveRecommended(channelId))
         val res = parseJson<ChzzkResponse<LiveRecommendedResponse>>(raw)
         if (res.code != 200) return emptyList()
         return res.content?.recommendedContents.orEmpty()
@@ -781,7 +781,7 @@ class ChzzkProvider : MainAPI() {
         val pageSize = 30
         var page = 0
         while (collected.size < MAX_CHANNEL_VIDEOS) {
-            val raw = ChzzkApi.get(Endpoints.channelVideos(channelId, page = page, size = pageSize)).text
+            val raw = ChzzkApi.getText(Endpoints.channelVideos(channelId, page = page, size = pageSize))
             val res = parseJson<ChzzkResponse<PageData<VideoSummary>>>(raw)
             ChzzkApi.checkOk(res.code, res.message, "channel videos $channelId p=$page")
             val data = res.content?.data.orEmpty()
@@ -868,28 +868,28 @@ class ChzzkProvider : MainAPI() {
      */
     private suspend fun augmentPlotWithCommunity(base: String, channelId: String): String {
         val rankers = runCatching {
-            val raw = ChzzkApi.get(Endpoints.donationRankWeekly(channelId, rankCount = 5)).text
+            val raw = ChzzkApi.getText(Endpoints.donationRankWeekly(channelId, rankCount = 5))
             parseJson<ChzzkResponse<DonationRankResponse>>(raw)
                 .content?.rankList.orEmpty()
         }.getOrDefault(emptyList<DonationRanker>())
 
         val rules = runCatching {
-            val raw = ChzzkApi.get(Endpoints.chatRules(channelId)).text
+            val raw = ChzzkApi.getText(Endpoints.chatRules(channelId))
             parseJson<ChzzkResponse<ChatRules>>(raw).content
         }.getOrNull()
 
         val cafe = runCatching {
-            val raw = ChzzkApi.get(Endpoints.channelCafeConnection(channelId)).text
+            val raw = ChzzkApi.getText(Endpoints.channelCafeConnection(channelId))
             parseJson<ChzzkResponse<CafeConnection>>(raw).content
         }.getOrNull()
 
         val logPower = runCatching {
-            val raw = ChzzkApi.get(Endpoints.logPowerWeekly(channelId)).text
+            val raw = ChzzkApi.getText(Endpoints.logPowerWeekly(channelId))
             parseJson<ChzzkResponse<LogPowerWeekly>>(raw).content
         }.getOrNull()
 
         val shop = runCatching {
-            val raw = ChzzkApi.get(Endpoints.streamerShopProducts(channelId)).text
+            val raw = ChzzkApi.getText(Endpoints.streamerShopProducts(channelId))
             parseJson<ChzzkResponse<StreamerShopProducts>>(raw).content
         }.getOrNull()
 
